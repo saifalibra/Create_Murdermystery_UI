@@ -1,13 +1,15 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useAutoSave } from "./useAutoSave";
 
-type Location = { id: string; name: string };
+type Location = { id: string; name: string; details?: string | null };
 
 export default function LocationsTab() {
   const [list, setList] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<"add" | "edit" | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
-  const [form, setForm] = useState({ id: "", name: "" });
+  const [form, setForm] = useState({ id: "", name: "", details: "" });
+  const isInitialMount = useRef(true);
 
   const fetchList = async () => {
     try {
@@ -25,38 +27,60 @@ export default function LocationsTab() {
   }, []);
 
   const openAdd = () => {
-    setForm({ id: `loc_${Date.now()}`, name: "" });
-    setEditId(null);
+    const newId = `loc_${Date.now()}`;
+    setForm({ id: newId, name: "", details: "" });
+    setEditId(newId);
     setModal("add");
+    isInitialMount.current = true;
+    // 追加時は即座に作成
+    fetch("/api/locations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: newId, name: "", details: "" }),
+    })
+      .then(() => fetchList())
+      .catch((e) => console.error("Failed to create:", e));
   };
 
   const openEdit = (loc: Location) => {
-    setForm({ id: loc.id, name: loc.name });
+    setForm({ id: loc.id, name: loc.name || "", details: loc.details || "" });
     setEditId(loc.id);
     setModal("edit");
+    isInitialMount.current = true;
   };
 
   const save = async () => {
+    if (!editId) return;
     try {
-      if (modal === "add") {
-        await fetch("/api/locations", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(form),
-        });
-      } else {
-        await fetch(`/api/locations/${editId}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(form),
-        });
-      }
+      const body = { id: editId, name: form.name, details: form.details || null };
+      await fetch(`/api/locations/${editId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
       await fetchList();
-      setModal(null);
     } catch (e) {
       alert(e instanceof Error ? e.message : "保存に失敗しました");
     }
   };
+
+  // 自動保存（追加・編集とも）
+  useAutoSave(
+    form,
+    async () => {
+      if (editId && !isInitialMount.current) await save();
+    },
+    500
+  );
+
+  useEffect(() => {
+    if (isInitialMount.current && modal) {
+      const timer = setTimeout(() => {
+        isInitialMount.current = false;
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [modal]);
 
   const remove = async (id: string) => {
     if (!confirm("削除しますか？")) return;
@@ -82,18 +106,23 @@ export default function LocationsTab() {
       {list.length === 0 ? (
         <div className="empty-state">場所がありません。「追加」で登録してください。</div>
       ) : (
-        <div className="locations-list">
+        <div className="unified-card-grid">
           {list.map((loc) => (
             <div
               key={loc.id}
-              className="location-card"
+              className="unified-card"
               onClick={() => openEdit(loc)}
               role="button"
               tabIndex={0}
               onKeyDown={(e) => e.key === "Enter" && openEdit(loc)}
             >
               <div className="location-name">{loc.name || "(名前なし)"}</div>
-              <div className="location-type">{loc.id}</div>
+              {loc.details && (
+                <div style={{ marginTop: "0.5rem", fontSize: "0.9rem", color: "#8b949e" }}>
+                  {loc.details.slice(0, 60)}
+                  {loc.details.length > 60 ? "…" : ""}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -108,20 +137,21 @@ export default function LocationsTab() {
             </div>
             <div className="modal-body">
               <div className="form-group">
-                <label>ID</label>
-                <input
-                  className="form-control"
-                  value={form.id}
-                  onChange={(e) => setForm((f) => ({ ...f, id: e.target.value }))}
-                  disabled={modal === "edit"}
-                />
-              </div>
-              <div className="form-group">
                 <label>名前</label>
                 <input
                   className="form-control"
                   value={form.name}
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                />
+              </div>
+              <div className="form-group">
+                <label>詳細</label>
+                <textarea
+                  className="form-control"
+                  value={form.details}
+                  onChange={(e) => setForm((f) => ({ ...f, details: e.target.value }))}
+                  rows={4}
+                  placeholder="その場所の詳細を記載"
                 />
               </div>
             </div>
@@ -132,10 +162,7 @@ export default function LocationsTab() {
                 </button>
               )}
               <button type="button" className="btn-secondary" onClick={() => setModal(null)}>
-                キャンセル
-              </button>
-              <button type="button" className="btn-primary" onClick={save}>
-                保存
+                閉じる
               </button>
             </div>
           </div>

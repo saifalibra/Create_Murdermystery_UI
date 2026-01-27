@@ -10,6 +10,9 @@ import {
   useEdgesState,
   Connection,
   MarkerType,
+  Handle,
+  Position,
+  NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { Logic, GraphNode, GraphEdge } from "./types";
@@ -17,6 +20,50 @@ import EditEvidenceModal from "./EditEvidenceModal";
 import EditSecretModal from "./EditSecretModal";
 import EditLocationModal from "./EditLocationModal";
 import EditCharacterModal from "./EditCharacterModal";
+
+// カスタムノードコンポーネント（接続点を大きく）
+function CustomNode({ data }: NodeProps) {
+  if (data.isEventGroup) {
+    return (
+      <div
+        style={{
+          background: data.color || "#1c2128",
+          color: "#fff",
+          border: "3px solid #58a6ff",
+          borderRadius: "12px",
+          padding: "1rem",
+          minWidth: "300px",
+          minHeight: "200px",
+        }}
+      >
+        <div style={{ fontWeight: 600, marginBottom: "0.5rem", fontSize: "1.1rem" }}>{data.label}</div>
+        <div style={{ fontSize: "0.85rem", color: "#8b949e" }}>子ノードはこのボックス内に配置されます</div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        background: data.color || "#6b7280",
+        color: "#fff",
+        border: "2px solid #fff",
+        borderRadius: "8px",
+        padding: "10px",
+        width: 150,
+        minHeight: 40,
+      }}
+    >
+      <Handle type="target" position={Position.Top} style={{ width: 16, height: 16, background: "#fff" }} />
+      <div>{data.label}</div>
+      <Handle type="source" position={Position.Bottom} style={{ width: 16, height: 16, background: "#fff" }} />
+    </div>
+  );
+}
+
+const nodeTypes = {
+  custom: CustomNode,
+};
 
 /** ノードタイプ別の色（画像の証拠=青・秘密=赤・場所=橙・人物=紫に合わせる） */
 const NODE_TYPE_COLORS: Record<string, string> = {
@@ -72,6 +119,7 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
   const [editModalNodeId, setEditModalNodeId] = useState<string | null>(null);
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [characters, setCharacters] = useState<{ id: string; name: string }[]>([]);
+  const [events, setEvents] = useState<{ id: string; title: string }[]>([]);
   const [addNodeOpen, setAddNodeOpen] = useState(false);
 
   const [nodeToLogicMap, setNodeToLogicMap] = useState<Map<string, string>>(
@@ -129,9 +177,10 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
   useEffect(() => {
     const load = async () => {
       try {
-        const [locRes, charRes] = await Promise.all([
+        const [locRes, charRes, evRes] = await Promise.all([
           fetch("/api/locations"),
           fetch("/api/characters"),
+          fetch("/api/events"),
         ]);
         if (locRes.ok) {
           const data = await locRes.json();
@@ -141,8 +190,12 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
           const data = await charRes.json();
           setCharacters(data.map((x: { id: string; name: string }) => ({ id: x.id, name: x.name })));
         }
+        if (evRes.ok) {
+          const data = await evRes.json();
+          setEvents(data.map((x: { id: string; title: string }) => ({ id: x.id, title: x.title || x.id })));
+        }
       } catch (e) {
-        console.error("Failed to fetch locations/characters:", e);
+        console.error("Failed to fetch locations/characters/events:", e);
       }
     };
     load();
@@ -156,36 +209,111 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
   }, [graphNodes.length, graphEdges.length, computeLogics]);
 
 
-  // React Flow用のノードに変換（タイプ別色 + ロジックはtitleで表示）
+  // イベントごとにノードをグループ化
+  const eventGroups = useMemo(() => {
+    const groups = new Map<string, GraphNode[]>();
+    graphNodes.forEach((node) => {
+      if (node.event_id) {
+        if (!groups.has(node.event_id)) {
+          groups.set(node.event_id, []);
+        }
+        groups.get(node.event_id)!.push(node);
+      }
+    });
+    return groups;
+  }, [graphNodes]);
+
+  // React Flow用のノードに変換（タイプ別色 + ロジックはtitleで表示 + イベントグループ化）
   const toRFNodes = useMemo((): Node[] => {
-    return graphNodes.map((node, index) => {
+    const nodes: Node[] = [];
+    const processedNodeIds = new Set<string>();
+    let baseX = 0;
+    let baseY = 0;
+
+    // イベントグループを処理
+    eventGroups.forEach((groupNodes, eventId) => {
+      if (groupNodes.length === 0) return;
+      const event = events.find((e) => e.id === eventId);
+      const groupNodeId = `event_group_${eventId}`;
+
+      // イベントグループノード（親）
+      nodes.push({
+        id: groupNodeId,
+        type: "custom",
+        position: { x: baseX, y: baseY },
+        data: {
+          label: `イベント: ${event?.title || eventId}`,
+          node: null,
+          color: "#6b7280",
+          isEventGroup: true,
+          eventId,
+        },
+        style: {
+          background: "#1c2128",
+          border: "3px solid #58a6ff",
+          borderRadius: "12px",
+          padding: "1rem",
+          minWidth: "300px",
+          minHeight: "200px",
+        },
+      });
+
+      // 子ノードをグループ内に配置
+      groupNodes.forEach((node, idx) => {
+        processedNodeIds.add(node.node_id);
+        const logicId = nodeToLogic.get(node.node_id);
+        const logicName = logicId ? getLogicName(logicId, logics) : "";
+        const fillColor = NODE_TYPE_COLORS[node.node_type] ?? DEFAULT_NODE_COLOR;
+
+        nodes.push({
+          id: node.node_id,
+          type: "custom",
+          position: {
+            x: baseX + 20 + (idx % 3) * 160,
+            y: baseY + 50 + Math.floor(idx / 3) * 80,
+          },
+          data: {
+            label: `${node.node_type}: ${node.reference_id}`,
+            node,
+            color: fillColor,
+            parentId: groupNodeId,
+          },
+          title: logicName,
+        });
+      });
+
+      baseY += 250;
+      if (baseY > 800) {
+        baseY = 0;
+        baseX += 400;
+      }
+    });
+
+    // イベントに紐づいていないノード
+    graphNodes.forEach((node, index) => {
+      if (processedNodeIds.has(node.node_id)) return;
       const logicId = nodeToLogic.get(node.node_id);
       const logicName = logicId ? getLogicName(logicId, logics) : "";
       const fillColor = NODE_TYPE_COLORS[node.node_type] ?? DEFAULT_NODE_COLOR;
 
-      return {
+      nodes.push({
         id: node.node_id,
-        type: "default",
+        type: "custom",
         position: {
-          x: (index % 10) * 150,
-          y: Math.floor(index / 10) * 100,
+          x: baseX + (index % 10) * 150,
+          y: baseY + Math.floor(index / 10) * 100,
         },
         data: {
           label: `${node.node_type}: ${node.reference_id}`,
           node,
-        },
-        style: {
-          background: fillColor,
-          color: "#fff",
-          border: "2px solid #fff",
-          borderRadius: "8px",
-          padding: "10px",
-          width: 150,
+          color: fillColor,
         },
         title: logicName,
-      };
+      });
     });
-  }, [graphNodes, nodeToLogic, logics]);
+
+    return nodes;
+  }, [graphNodes, nodeToLogic, logics, eventGroups, events]);
 
   // React Flow用のエッジに変換（色分け改善）
   const toRFEdges = useMemo((): Edge[] => {
@@ -276,8 +404,8 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
     []
   );
 
-  // ノードのダブルクリック処理（タイプ別編集モーダル）
-  const onNodeDoubleClick = useCallback((_event: React.MouseEvent, node: Node) => {
+  // ノードのクリック処理（タイプ別編集モーダル）
+  const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
     setEditModalNodeId(node.id);
   }, []);
 
@@ -704,11 +832,16 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
           onNodeContextMenu={onNodeContextMenu}
-          onNodeDoubleClick={onNodeDoubleClick}
+          onNodeClick={onNodeClick}
           fitView
+          nodeTypes={nodeTypes}
+          defaultEdgeOptions={{
+            style: { strokeWidth: 2 },
+            markerEnd: { type: MarkerType.ArrowClosed },
+          }}
         >
           <Background />
-          <Controls />
+          <Controls showZoom={false} showFitView={true} showInteractive={false} />
           <MiniMap />
         </ReactFlow>
       </div>
@@ -827,6 +960,7 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
               graphEdges={graphEdges}
               locations={locations}
               characters={characters}
+              events={events}
               onClose={() => setEditModalNodeId(null)}
               onSaved={refreshGraph}
               onDeletedFromGraph={refreshGraph}
@@ -840,6 +974,7 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
               logics={logics}
               nodeToLogic={nodeToLogicMap}
               characters={characters}
+              events={events}
               onClose={() => setEditModalNodeId(null)}
               onSaved={refreshGraph}
               onDeletedFromGraph={refreshGraph}
@@ -854,6 +989,7 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
               node={editModalNode}
               graphNodes={graphNodes}
               graphEdges={graphEdges}
+              events={events}
               onClose={() => setEditModalNodeId(null)}
               onSaved={refreshGraph}
               onDeletedFromGraph={refreshGraph}
@@ -864,6 +1000,7 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
               node={editModalNode}
               graphNodes={graphNodes}
               graphEdges={graphEdges}
+              events={events}
               onClose={() => setEditModalNodeId(null)}
               onSaved={refreshGraph}
               onDeletedFromGraph={refreshGraph}

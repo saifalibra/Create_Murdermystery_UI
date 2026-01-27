@@ -17,5 +17,6 @@ class Claim(BaseModel):
 
 class Secret(BaseModel):
     id: str
-    character_id: str
+    character_id: str = ""  # 廃止予定。紐づけはキャラクターの secret_ids で管理
     description: str = ""
+    hidden_from_character_ids: List[str] = Field(default_factory=list)

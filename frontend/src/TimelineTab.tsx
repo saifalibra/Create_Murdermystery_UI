@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 type TimeBlock = {
   block_id: string;
@@ -12,25 +12,185 @@ type CharacterTimeline = {
   time_blocks: TimeBlock[];
 };
 
+type Event = {
+  id: string;
+  title: string;
+  content?: string;
+  time_range: { start: string; end: string };
+  location_ids: string[];
+  participants?: string[];
+};
+
+type GridCell = {
+  locationId: string;
+  timeSlot: string;
+};
+
+const TIME_SLOTS: string[] = [];
+for (let h = 0; h < 24; h++) {
+  for (let m = 0; m < 60; m += 30) {
+    TIME_SLOTS.push(`${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}`);
+  }
+}
+
+function TimelineEventEditModal({
+  event,
+  locations,
+  characters,
+  onClose,
+  onSaved,
+}: {
+  event: Event;
+  locations: { id: string; name: string }[];
+  characters: { id: string; name: string }[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [title, setTitle] = useState(event.title);
+  const [content, setContent] = useState(event.content ?? "");
+  const [start, setStart] = useState((event.time_range?.start ?? "").slice(0, 16));
+  const [end, setEnd] = useState((event.time_range?.end ?? "").slice(0, 16));
+  const [locationIds, setLocationIds] = useState<string[]>(event.location_ids ?? []);
+  const [participants, setParticipants] = useState<string[]>(event.participants ?? []);
+
+  const toggleLoc = (id: string) => {
+    setLocationIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+  const togglePart = (id: string) => {
+    setParticipants((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const save = async () => {
+    try {
+      await fetch(`/api/events/${event.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...event,
+          title,
+          content,
+          time_range: {
+            start: start ? `${start}:00` : event.time_range.start,
+            end: end ? `${end}:00` : event.time_range.end,
+          },
+          location_ids: locationIds,
+          participants,
+        }),
+      });
+      onSaved();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "保存に失敗しました");
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>イベント編集</h3>
+          <button type="button" className="modal-close" onClick={onClose}>×</button>
+        </div>
+        <div className="modal-body">
+          <div className="form-group">
+            <label>タイトル</label>
+            <input className="form-control" value={title} onChange={(e) => setTitle(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label>内容</label>
+            <textarea className="form-control" value={content} onChange={(e) => setContent(e.target.value)} rows={3} />
+          </div>
+          <div className="form-row">
+            <div className="form-group">
+              <label>開始</label>
+              <input
+                type="datetime-local"
+                className="form-control"
+                value={start}
+                onChange={(e) => setStart(e.target.value)}
+              />
+            </div>
+            <div className="form-group">
+              <label>終了</label>
+              <input
+                type="datetime-local"
+                className="form-control"
+                value={end}
+                onChange={(e) => setEnd(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="form-group">
+            <label>場所（複数可）</label>
+            <div className="checkbox-group">
+              {locations.map((loc) => (
+                <label key={loc.id} className="checkbox-label">
+                  <input type="checkbox" checked={locationIds.includes(loc.id)} onChange={() => toggleLoc(loc.id)} />
+                  {loc.name}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="form-group">
+            <label>参加者（複数可）</label>
+            <div className="checkbox-group">
+              {characters.map((c) => (
+                <label key={c.id} className="checkbox-label">
+                  <input type="checkbox" checked={participants.includes(c.id)} onChange={() => togglePart(c.id)} />
+                  {c.name}
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button type="button" className="btn-secondary" onClick={onClose}>キャンセル</button>
+          <button type="button" className="btn-primary" onClick={save}>保存</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function TimelineTab() {
   const [timelines, setTimelines] = useState<CharacterTimeline[]>([]);
+  const [events, setEvents] = useState<Event[]>([]);
   const [characters, setCharacters] = useState<{ id: string; name: string }[]>([]);
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
-  const [modal, setModal] = useState<"add" | null>(null);
-  const [form, setForm] = useState({ character_id: "" });
+  const [selectedCharacter, setSelectedCharacter] = useState<string | null>(null);
+  const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState<GridCell | null>(null);
+  const [eventModal, setEventModal] = useState<{ isOpen: boolean; cells: GridCell[] }>({
+    isOpen: false,
+    cells: [],
+  });
+  const [createTitle, setCreateTitle] = useState("");
+  const [createContent, setCreateContent] = useState("");
+  const [createParticipants, setCreateParticipants] = useState<string[]>([]);
+  const [editEvent, setEditEvent] = useState<Event | null>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
 
   const fetchData = async () => {
     try {
-      const [tlRes, charRes, locRes] = await Promise.all([
+      const [tlRes, evRes, charRes, locRes] = await Promise.all([
         fetch("/api/timeline"),
+        fetch("/api/events"),
         fetch("/api/characters"),
         fetch("/api/locations"),
       ]);
       if (tlRes.ok) setTimelines(await tlRes.json());
+      if (evRes.ok) setEvents(await evRes.json());
       if (charRes.ok) {
         const d = await charRes.json();
         setCharacters(d.map((x: { id: string; name: string }) => ({ id: x.id, name: x.name })));
+        if (d.length > 0 && !selectedCharacter) {
+          setSelectedCharacter(d[0].id);
+        }
       }
       if (locRes.ok) {
         const d = await locRes.json();
@@ -47,39 +207,153 @@ export default function TimelineTab() {
     fetchData();
   }, []);
 
-  const openAdd = () => {
-    setForm({ character_id: characters[0]?.id ?? "" });
-    setModal("add");
+  const getCellKey = (locationId: string, timeSlot: string) => `${locationId}:${timeSlot}`;
+
+  const parseCellKey = (key: string): GridCell => {
+    const i = key.indexOf(":");
+    if (i < 0) return { locationId: "", timeSlot: "" };
+    return { locationId: key.slice(0, i), timeSlot: key.slice(i + 1) };
   };
 
-  const createTimeline = async () => {
-    if (!form.character_id) return;
+  const getCellFromEvent = (event: Event): GridCell[] => {
+    const cells: GridCell[] = [];
+    const start = new Date(event.time_range.start);
+    const end = new Date(event.time_range.end);
+    event.location_ids.forEach((locId) => {
+      TIME_SLOTS.forEach((slot) => {
+        const [h, m] = slot.split(":").map(Number);
+        const slotTime = new Date(start);
+        slotTime.setHours(h, m, 0, 0);
+        if (slotTime >= start && slotTime < end) {
+          cells.push({ locationId: locId, timeSlot: slot });
+        }
+      });
+    });
+    return cells;
+  };
+
+  const handleMouseDown = (locationId: string, timeSlot: string) => {
+    setIsDragging(true);
+    setDragStart({ locationId, timeSlot });
+    setSelectedCells(new Set([getCellKey(locationId, timeSlot)]));
+  };
+
+  const handleMouseMove = useCallback(
+    (e: MouseEvent) => {
+      if (!isDragging || !dragStart || !gridRef.current) return;
+      const rect = gridRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const scrollTop = gridRef.current.scrollTop || 0;
+
+      const cellWidth = rect.width / (locations.length + 1);
+      const cellHeight = 40;
+      const headerHeight = 40;
+
+      const locationIndex = Math.floor(x / cellWidth) - 1;
+      const timeIndex = Math.floor((y + scrollTop - headerHeight) / cellHeight);
+
+      if (locationIndex >= 0 && locationIndex < locations.length && timeIndex >= 0 && timeIndex < TIME_SLOTS.length) {
+        const currentLocationId = locations[locationIndex].id;
+        const currentTimeSlot = TIME_SLOTS[timeIndex];
+        const currentCell = { locationId: currentLocationId, timeSlot: currentTimeSlot };
+
+        const startLocIdx = locations.findIndex((l) => l.id === dragStart.locationId);
+        const startTimeIdx = TIME_SLOTS.indexOf(dragStart.timeSlot);
+        const endLocIdx = locationIndex;
+        const endTimeIdx = timeIndex;
+
+        const minLocIdx = Math.min(startLocIdx, endLocIdx);
+        const maxLocIdx = Math.max(startLocIdx, endLocIdx);
+        const minTimeIdx = Math.min(startTimeIdx, endTimeIdx);
+        const maxTimeIdx = Math.max(startTimeIdx, endTimeIdx);
+
+        const newSelected = new Set<string>();
+        for (let locIdx = minLocIdx; locIdx <= maxLocIdx; locIdx++) {
+          for (let timeIdx = minTimeIdx; timeIdx <= maxTimeIdx; timeIdx++) {
+            newSelected.add(getCellKey(locations[locIdx].id, TIME_SLOTS[timeIdx]));
+          }
+        }
+        setSelectedCells(newSelected);
+      }
+    },
+    [isDragging, dragStart, locations]
+  );
+
+  const handleMouseUp = useCallback(() => {
+    if (isDragging && selectedCells.size > 0) {
+      const cells = Array.from(selectedCells).map(parseCellKey);
+      setEventModal({ isOpen: true, cells });
+      setCreateTitle("");
+      setCreateContent("");
+      setCreateParticipants([]);
+    }
+    setIsDragging(false);
+    setDragStart(null);
+  }, [isDragging, selectedCells]);
+
+  useEffect(() => {
+    if (isDragging) {
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+      return () => {
+        document.removeEventListener("mousemove", handleMouseMove);
+        document.removeEventListener("mouseup", handleMouseUp);
+      };
+    }
+  }, [isDragging, handleMouseMove, handleMouseUp]);
+
+  const createEventFromCells = async (title: string, content: string, participants: string[]) => {
+    if (eventModal.cells.length === 0) return;
+
+    const locationIds = Array.from(new Set(eventModal.cells.map((c) => c.locationId)));
+    const timeSlots = [...new Set(eventModal.cells.map((c) => c.timeSlot))].sort();
+    const startSlot = timeSlots[0];
+    const endSlot = timeSlots[timeSlots.length - 1];
+
+    const [startH, startM] = startSlot.split(":").map(Number);
+    const [endH, endM] = endSlot.split(":").map(Number);
+    const endMinutes = endH * 60 + endM + 30;
+    const endH2 = Math.floor(endMinutes / 60) % 24;
+    const endM2 = endMinutes % 60;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const start = new Date(today);
+    start.setHours(startH, startM, 0, 0);
+    const end = new Date(today);
+    end.setHours(endH2, endM2, 0, 0);
+
     try {
-      const locId = locations[0]?.id;
-      const start = "2025-01-01T00:00:00";
-      const end = "2025-01-01T01:00:00";
-      await fetch("/api/timeline", {
+      const eventId = `ev_${Date.now()}`;
+      await fetch("/api/events", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          character_id: form.character_id,
-          time_blocks: locId
-            ? [
-                {
-                  block_id: `tb_${Date.now()}`,
-                  time_range: { start, end },
-                  location_id: locId,
-                  events: [],
-                },
-              ]
-            : [],
+          id: eventId,
+          title,
+          content,
+          time_range: { start: start.toISOString(), end: end.toISOString() },
+          location_ids: locationIds,
+          participants,
         }),
       });
       await fetchData();
-      setModal(null);
+      setEventModal({ isOpen: false, cells: [] });
+      setSelectedCells(new Set());
+      setCreateTitle("");
+      setCreateContent("");
+      setCreateParticipants([]);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "作成に失敗しました");
+      alert(e instanceof Error ? e.message : "イベント作成に失敗しました");
     }
+  };
+
+  const getEventsInCell = (locationId: string, timeSlot: string): Event[] => {
+    return events.filter((ev) => {
+      const cellKey = getCellKey(locationId, timeSlot);
+      return getCellFromEvent(ev).some((c) => getCellKey(c.locationId, c.timeSlot) === cellKey);
+    });
   };
 
   const charName = (cid: string) => characters.find((c) => c.id === cid)?.name ?? cid;
@@ -87,99 +361,249 @@ export default function TimelineTab() {
 
   if (loading) return <div className="loading">読み込み中…</div>;
 
+  if (!characters.length) {
+    return (
+      <div>
+        <h2>タイムライン</h2>
+        <p style={{ color: "#8b949e" }}>タイムラインを表示するには、先にキャラクターを登録してください。</p>
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="page-header">
         <h2>タイムライン</h2>
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={openAdd}
-          disabled={!characters.length}
-        >
-          タイムライン追加
-        </button>
-      </div>
-      {!characters.length && (
-        <p style={{ marginBottom: "1rem", color: "#8b949e" }}>
-          タイムラインを追加するには、先にキャラクターを登録してください。
-        </p>
-      )}
-      {timelines.length === 0 ? (
-        <div className="empty-state">
-          タイムラインがありません。「タイムライン追加」でキャラクターごとに作成してください。
+        <div>
+          <label style={{ marginRight: "0.5rem", color: "#c9d1d9" }}>キャラクター:</label>
+          <select
+            className="form-control"
+            style={{ display: "inline-block", width: "auto", minWidth: "200px" }}
+            value={selectedCharacter || ""}
+            onChange={(e) => setSelectedCharacter(e.target.value)}
+          >
+            {characters.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
         </div>
+      </div>
+
+      {!locations.length ? (
+        <div className="empty-state">場所を登録すると、タイムライングリッドが表示されます。</div>
       ) : (
-        <div className="contact-timeline">
-          {timelines.map((tl) => (
-            <div key={tl.character_id} className="contact-block">
-              <div className="contact-block-time" style={{ fontWeight: 600 }}>
-                {charName(tl.character_id)}（{tl.character_id}）
-              </div>
-              <div style={{ marginTop: "0.5rem" }}>
-                {tl.time_blocks?.length
-                  ? tl.time_blocks.map((b) => (
-                      <div
-                        key={b.block_id}
+        <div
+          ref={gridRef}
+          style={{
+            overflow: "auto",
+            border: "1px solid #30363d",
+            borderRadius: 8,
+            background: "#0d1117",
+          }}
+        >
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "800px" }}>
+            <thead>
+              <tr>
+                <th
+                  style={{
+                    position: "sticky",
+                    left: 0,
+                    zIndex: 10,
+                    background: "#21262d",
+                    padding: "0.5rem",
+                    border: "1px solid #30363d",
+                    minWidth: "100px",
+                  }}
+                >
+                  時間
+                </th>
+                {locations.map((loc) => (
+                  <th
+                    key={loc.id}
+                    style={{
+                      padding: "0.5rem",
+                      border: "1px solid #30363d",
+                      background: "#21262d",
+                      minWidth: "120px",
+                    }}
+                  >
+                    {loc.name}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {TIME_SLOTS.map((timeSlot) => (
+                <tr key={timeSlot}>
+                  <td
+                    style={{
+                      position: "sticky",
+                      left: 0,
+                      zIndex: 9,
+                      background: "#161b22",
+                      padding: "0.5rem",
+                      border: "1px solid #30363d",
+                      fontFamily: "ui-monospace, monospace",
+                      fontSize: "0.9rem",
+                      color: "#58a6ff",
+                    }}
+                  >
+                    {timeSlot}
+                  </td>
+                  {locations.map((loc) => {
+                    const cellKey = getCellKey(loc.id, timeSlot);
+                    const isSelected = selectedCells.has(cellKey);
+                    const cellEvents = getEventsInCell(loc.id, timeSlot);
+                    return (
+                      <td
+                        key={loc.id}
                         style={{
-                          padding: "0.5rem",
-                          marginBottom: "0.5rem",
-                          background: "#21262d",
-                          borderRadius: 6,
+                          padding: 0,
                           border: "1px solid #30363d",
+                          background: isSelected ? "#1f6feb40" : "#0d1117",
+                          height: "40px",
+                          cursor: "pointer",
+                          position: "relative",
                         }}
+                        onMouseDown={() => handleMouseDown(loc.id, timeSlot)}
                       >
-                        <span style={{ color: "#58a6ff" }}>
-                          {b.time_range?.start ?? "—"} ～ {b.time_range?.end ?? "—"}
-                        </span>
-                        <span style={{ marginLeft: "0.5rem", color: "#8b949e" }}>
-                          @ {locName(b.location_id)}
-                        </span>
-                      </div>
-                    ))
-                  : "（ブロックなし）"}
-              </div>
-            </div>
-          ))}
+                        {cellEvents.map((ev) => (
+                          <div
+                            key={ev.id}
+                            role="button"
+                            tabIndex={0}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditEvent(ev);
+                            }}
+                            onKeyDown={(e) => e.key === "Enter" && setEditEvent(ev)}
+                            style={{
+                              background: "#1f6feb",
+                              color: "#fff",
+                              padding: "0.25rem 0.5rem",
+                              fontSize: "0.85rem",
+                              borderRadius: 4,
+                              margin: "0.1rem",
+                              cursor: "pointer",
+                            }}
+                            title={ev.title}
+                          >
+                            {ev.title || "(無題)"}
+                          </div>
+                        ))}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
-      {modal && (
-        <div className="modal-overlay" onClick={() => setModal(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+      {eventModal.isOpen && (
+        <div className="modal-overlay" onClick={() => setEventModal({ isOpen: false, cells: [] })}>
+          <div className="modal" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>タイムライン追加</h3>
-              <button type="button" className="modal-close" onClick={() => setModal(null)}>×</button>
+              <h3>イベント作成</h3>
+              <button
+                type="button"
+                className="modal-close"
+                onClick={() => setEventModal({ isOpen: false, cells: [] })}
+              >
+                ×
+              </button>
             </div>
             <div className="modal-body">
               <div className="form-group">
-                <label>キャラクター</label>
-                <select
+                <label>タイトル</label>
+                <input
                   className="form-control"
-                  value={form.character_id}
-                  onChange={(e) => setForm((f) => ({ ...f, character_id: e.target.value }))}
-                >
-                  {characters.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
+                  placeholder="イベントタイトル"
+                  value={createTitle}
+                  onChange={(e) => setCreateTitle(e.target.value)}
+                  autoFocus
+                />
               </div>
-              {!locations.length && (
-                <p style={{ color: "#8b949e", fontSize: "0.9rem" }}>
-                  場所が未登録の場合は、初回ブロックなしで作成します。後から編集できます。
-                </p>
-              )}
+              <div className="form-group">
+                <label>内容</label>
+                <textarea
+                  className="form-control"
+                  rows={3}
+                  placeholder="イベント内容"
+                  value={createContent}
+                  onChange={(e) => setCreateContent(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label>参加者（複数可）</label>
+                <div className="checkbox-group">
+                  {characters.map((c) => (
+                    <label key={c.id} className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={createParticipants.includes(c.id)}
+                        onChange={() =>
+                          setCreateParticipants((prev) =>
+                            prev.includes(c.id) ? prev.filter((x) => x !== c.id) : [...prev, c.id]
+                          )
+                        }
+                      />
+                      {c.name}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div style={{ marginTop: "1rem", padding: "0.5rem", background: "#21262d", borderRadius: 6 }}>
+                <div style={{ fontSize: "0.9rem", color: "#8b949e", marginBottom: "0.5rem" }}>選択範囲:</div>
+                <div style={{ fontSize: "0.85rem", color: "#c9d1d9" }}>
+                  場所: {Array.from(new Set(eventModal.cells.map((c) => locName(c.locationId)))).join(", ")}
+                </div>
+                <div style={{ fontSize: "0.85rem", color: "#c9d1d9" }}>
+                  時間: {eventModal.cells[0]?.timeSlot} ～ {eventModal.cells[eventModal.cells.length - 1]?.timeSlot}
+                </div>
+              </div>
             </div>
             <div className="modal-footer">
-              <button type="button" className="btn-secondary" onClick={() => setModal(null)}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setEventModal({ isOpen: false, cells: [] })}
+              >
                 キャンセル
               </button>
-              <button type="button" className="btn-primary" onClick={createTimeline}>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() =>
+                  createEventFromCells(
+                    createTitle || "(無題)",
+                    createContent,
+                    createParticipants
+                  )
+                }
+              >
                 作成
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {editEvent && (
+        <TimelineEventEditModal
+          event={editEvent}
+          locations={locations}
+          characters={characters}
+          onClose={() => setEditEvent(null)}
+          onSaved={async () => {
+            await fetchData();
+            setEditEvent(null);
+          }}
+        />
       )}
     </div>
   );

@@ -11,6 +11,9 @@ class EvidencePointers(BaseModel):
     location_id: str | None = None
     character_id: str | None = None
     event_ids: List[str] = Field(default_factory=list)
+    # 最終所持者・最終場所（発見場所・発見人物から統合）
+    final_location_id: str | None = None
+    final_holder_character_id: str | None = None
 
 
 class EvidenceEffects(BaseModel):

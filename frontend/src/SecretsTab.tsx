@@ -1,6 +1,12 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useAutoSave } from "./useAutoSave";
 
-type Secret = { id: string; character_id: string; description: string };
+type Secret = {
+  id: string;
+  character_id: string;
+  description: string;
+  hidden_from_character_ids?: string[];
+};
 
 export default function SecretsTab() {
   const [list, setList] = useState<Secret[]>([]);
@@ -8,7 +14,13 @@ export default function SecretsTab() {
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<"add" | "edit" | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
-  const [form, setForm] = useState<Secret>({ id: "", character_id: "", description: "" });
+  const [form, setForm] = useState<Secret>({
+    id: "",
+    character_id: "",
+    description: "",
+    hidden_from_character_ids: [],
+  });
+  const isInitialMount = useRef(true);
 
   const fetchList = async () => {
     try {
@@ -33,41 +45,105 @@ export default function SecretsTab() {
   }, []);
 
   const openAdd = () => {
+    const newId = `sec_${Date.now()}`;
+    const defaultHidden = characters.map((c) => c.id);
     setForm({
-      id: `sec_${Date.now()}`,
-      character_id: characters[0]?.id ?? "",
+      id: newId,
+      character_id: "",
       description: "",
+      hidden_from_character_ids: defaultHidden,
     });
-    setEditId(null);
+    setEditId(newId);
     setModal("add");
+    isInitialMount.current = true;
+    fetch("/api/secrets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: newId,
+        character_id: "",
+        description: "",
+        hidden_from_character_ids: defaultHidden,
+      }),
+    })
+      .then(() => fetchList())
+      .catch((e) => console.error("Failed to create:", e));
   };
 
   const openEdit = (s: Secret) => {
-    setForm({ ...s });
+    const hidden = s.hidden_from_character_ids ?? [];
+    setForm({
+      ...s,
+      character_id: "",
+      hidden_from_character_ids: hidden.length
+        ? hidden
+        : characters.map((c) => c.id),
+    });
     setEditId(s.id);
     setModal("edit");
+    isInitialMount.current = true;
   };
 
   const save = async () => {
+    if (!editId) return;
     try {
-      if (modal === "add") {
-        await fetch("/api/secrets", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(form),
-        });
-      } else {
-        await fetch(`/api/secrets/${editId}`, {
+      const body = {
+        ...form,
+        hidden_from_character_ids: form.hidden_from_character_ids ?? [],
+      };
+      await fetch(`/api/secrets/${editId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const hidden = new Set(form.hidden_from_character_ids ?? []);
+      let chars: { id: string; secret_ids?: string[]; [k: string]: unknown }[] = [];
+      try {
+        const r = await fetch("/api/characters");
+        if (r.ok) chars = await r.json();
+      } catch (_) {}
+      for (const c of chars) {
+        const ids = (c.secret_ids ?? []) as string[];
+        if (!ids.includes(editId)) continue;
+        if (!hidden.has(c.id)) continue;
+        const next = ids.filter((id) => id !== editId);
+        await fetch(`/api/characters/${c.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(form),
+          body: JSON.stringify({ ...c, secret_ids: next }),
         });
       }
       await fetchList();
-      setModal(null);
     } catch (e) {
       alert(e instanceof Error ? e.message : "保存に失敗しました");
     }
+  };
+
+  // 自動保存（追加・編集とも）
+  useAutoSave(
+    form,
+    async () => {
+      if (editId && !isInitialMount.current) await save();
+    },
+    500
+  );
+
+  useEffect(() => {
+    if (isInitialMount.current && modal) {
+      const timer = setTimeout(() => {
+        isInitialMount.current = false;
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [modal]);
+
+  const toggleHiddenFrom = (characterId: string) => {
+    setForm((f) => ({
+      ...f,
+      hidden_from_character_ids: f.hidden_from_character_ids?.includes(characterId)
+        ? f.hidden_from_character_ids.filter((id) => id !== characterId)
+        : [...(f.hidden_from_character_ids ?? []), characterId],
+    }));
   };
 
   const remove = async (id: string) => {
@@ -81,26 +157,19 @@ export default function SecretsTab() {
     }
   };
 
-  const charName = (cid: string) => characters.find((c) => c.id === cid)?.name ?? cid;
-
   if (loading) return <div className="loading">読み込み中…</div>;
 
   return (
     <div>
       <div className="page-header">
         <h2>秘密</h2>
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={openAdd}
-          disabled={!characters.length}
-        >
+        <button type="button" className="btn-primary" onClick={openAdd}>
           追加
         </button>
       </div>
       {!characters.length && (
         <p style={{ marginBottom: "1rem", color: "#8b949e" }}>
-          秘密を追加するには、先にキャラクターを登録してください。
+          「隠したい人物」を選ぶには、先にキャラクターを登録してください。
         </p>
       )}
       {list.length === 0 ? (
@@ -108,7 +177,7 @@ export default function SecretsTab() {
           秘密がありません。「追加」で登録してください。
         </div>
       ) : (
-        <div className="secrets-list">
+        <div className="unified-card-grid">
           {list.map((s) => (
             <div
               key={s.id}
@@ -118,8 +187,9 @@ export default function SecretsTab() {
               tabIndex={0}
               onKeyDown={(e) => e.key === "Enter" && openEdit(s)}
             >
-              <div className="location-name">ID: {s.id}</div>
-              <div className="location-type">キャラ: {charName(s.character_id)}</div>
+              <div className="location-name">
+                隠す: {characters.filter((c) => (s.hidden_from_character_ids ?? []).includes(c.id)).map((c) => c.name).join(", ") || "—"}
+              </div>
               {s.description && (
                 <p style={{ marginTop: "0.5rem", fontSize: "0.9rem", color: "#8b949e" }}>
                   {s.description.slice(0, 80)}
@@ -140,27 +210,6 @@ export default function SecretsTab() {
             </div>
             <div className="modal-body">
               <div className="form-group">
-                <label>ID</label>
-                <input
-                  className="form-control"
-                  value={form.id}
-                  onChange={(e) => setForm((f) => ({ ...f, id: e.target.value }))}
-                  disabled={modal === "edit"}
-                />
-              </div>
-              <div className="form-group">
-                <label>キャラクター</label>
-                <select
-                  className="form-control"
-                  value={form.character_id}
-                  onChange={(e) => setForm((f) => ({ ...f, character_id: e.target.value }))}
-                >
-                  {characters.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="form-group">
                 <label>説明</label>
                 <textarea
                   className="form-control"
@@ -168,6 +217,21 @@ export default function SecretsTab() {
                   onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
                   rows={4}
                 />
+              </div>
+              <div className="form-group">
+                <label>隠したい人物（全員から複数選択）</label>
+                <div className="checkbox-group">
+                  {characters.map((c) => (
+                      <label key={c.id} className="checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={form.hidden_from_character_ids?.includes(c.id) ?? false}
+                          onChange={() => toggleHiddenFrom(c.id)}
+                        />
+                        {c.name}
+                      </label>
+                    ))}
+                </div>
               </div>
             </div>
             <div className="modal-footer">
@@ -177,10 +241,7 @@ export default function SecretsTab() {
                 </button>
               )}
               <button type="button" className="btn-secondary" onClick={() => setModal(null)}>
-                キャンセル
-              </button>
-              <button type="button" className="btn-primary" onClick={save}>
-                保存
+                閉じる
               </button>
             </div>
           </div>

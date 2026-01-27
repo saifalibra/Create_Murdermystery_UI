@@ -5,3 +5,4 @@ from pydantic import BaseModel
 class Location(BaseModel):
     id: str
     name: str
+    details: str | None = None

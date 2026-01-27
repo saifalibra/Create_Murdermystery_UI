@@ -1,11 +1,17 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useAutoSave } from "./useAutoSave";
 
 type Evidence = {
   id: string;
   name: string;
   summary: string;
   detail: string;
-  pointers?: { location_id?: string | null; character_id?: string | null };
+  pointers?: {
+    location_id?: string | null;
+    character_id?: string | null;
+    final_location_id?: string | null;
+    final_holder_character_id?: string | null;
+  };
 };
 
 export default function EvidenceTab() {
@@ -22,6 +28,7 @@ export default function EvidenceTab() {
     detail: "",
     pointers: {},
   });
+  const isInitialMount = useRef(true);
 
   const fetchList = async () => {
     try {
@@ -51,58 +58,85 @@ export default function EvidenceTab() {
   }, []);
 
   const openAdd = () => {
+    const newId = `ev_${Date.now()}`;
     setForm({
-      id: `ev_${Date.now()}`,
+      id: newId,
       name: "",
       summary: "",
       detail: "",
-      pointers: {},
+      pointers: { final_location_id: null, final_holder_character_id: null },
     });
-    setEditId(null);
+    setEditId(newId);
     setModal("add");
+    isInitialMount.current = true;
+    // 追加時は即座に作成
+    fetch("/api/evidence", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: newId,
+        name: "",
+        summary: "",
+        detail: "",
+        pointers: { final_location_id: null, final_holder_character_id: null },
+      }),
+    })
+      .then(() => fetchList())
+      .catch((e) => console.error("Failed to create:", e));
   };
 
   const openEdit = (e: Evidence) => {
     setForm({
       ...e,
-      pointers: e.pointers ?? {},
+      pointers: {
+        ...e.pointers,
+        final_location_id: e.pointers?.final_location_id ?? e.pointers?.location_id ?? null,
+        final_holder_character_id: e.pointers?.final_holder_character_id ?? e.pointers?.character_id ?? null,
+      },
     });
     setEditId(e.id);
     setModal("edit");
+    isInitialMount.current = true;
   };
 
   const save = async () => {
+    if (!editId) return;
     try {
+      const existing = list.find((x) => x.id === editId) as Evidence & Record<string, unknown>;
       const pointers = {
-        location_id: form.pointers?.location_id ?? null,
-        character_id: form.pointers?.character_id ?? null,
+        ...(existing?.pointers as object),
+        final_location_id: form.pointers?.final_location_id ?? null,
+        final_holder_character_id: form.pointers?.final_holder_character_id ?? null,
       };
-      if (modal === "add") {
-        const body = { ...form, pointers };
-        await fetch("/api/evidence", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-      } else {
-        const existing = list.find((x) => x.id === editId) as Evidence & Record<string, unknown>;
-        const merged = {
-          ...existing,
-          ...form,
-          pointers: { ...(existing?.pointers as object), ...pointers },
-        };
-        await fetch(`/api/evidence/${editId}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(merged),
-        });
-      }
+      const body = { ...existing, ...form, pointers };
+      await fetch(`/api/evidence/${editId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
       await fetchList();
-      setModal(null);
     } catch (err) {
       alert(err instanceof Error ? err.message : "保存に失敗しました");
     }
   };
+
+  // 自動保存（追加・編集とも）
+  useAutoSave(
+    form,
+    async () => {
+      if (editId && !isInitialMount.current) await save();
+    },
+    500
+  );
+
+  useEffect(() => {
+    if (isInitialMount.current && modal) {
+      const timer = setTimeout(() => {
+        isInitialMount.current = false;
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [modal]);
 
   const remove = async (id: string) => {
     if (!confirm("削除しますか？")) return;
@@ -128,7 +162,7 @@ export default function EvidenceTab() {
       {list.length === 0 ? (
         <div className="empty-state">証拠がありません。「追加」で登録してください。</div>
       ) : (
-        <div className="evidence-list">
+        <div className="unified-card-grid">
           {list.map((e) => (
             <div
               key={e.id}
@@ -139,7 +173,6 @@ export default function EvidenceTab() {
               onKeyDown={(ev) => ev.key === "Enter" && openEdit(e)}
             >
               <div className="location-name">{e.name || "(名前なし)"}</div>
-              <div className="location-type">{e.id}</div>
               {e.summary && (
                 <p style={{ marginTop: "0.5rem", fontSize: "0.9rem", color: "#8b949e" }}>{e.summary}</p>
               )}
@@ -156,15 +189,6 @@ export default function EvidenceTab() {
               <button type="button" className="modal-close" onClick={() => setModal(null)}>×</button>
             </div>
             <div className="modal-body">
-              <div className="form-group">
-                <label>ID</label>
-                <input
-                  className="form-control"
-                  value={form.id}
-                  onChange={(ev) => setForm((f) => ({ ...f, id: ev.target.value }))}
-                  disabled={modal === "edit"}
-                />
-              </div>
               <div className="form-group">
                 <label>名前</label>
                 <input
@@ -193,14 +217,14 @@ export default function EvidenceTab() {
                 />
               </div>
               <div className="form-group">
-                <label>発見場所</label>
+                <label>最終場所</label>
                 <select
                   className="form-control"
-                  value={form.pointers?.location_id ?? ""}
+                  value={form.pointers?.final_location_id ?? ""}
                   onChange={(ev) =>
                     setForm((f) => ({
                       ...f,
-                      pointers: { ...f.pointers, location_id: ev.target.value || null },
+                      pointers: { ...f.pointers, final_location_id: ev.target.value || null },
                     }))
                   }
                 >
@@ -211,14 +235,14 @@ export default function EvidenceTab() {
                 </select>
               </div>
               <div className="form-group">
-                <label>発見人物</label>
+                <label>最終所持者</label>
                 <select
                   className="form-control"
-                  value={form.pointers?.character_id ?? ""}
+                  value={form.pointers?.final_holder_character_id ?? ""}
                   onChange={(ev) =>
                     setForm((f) => ({
                       ...f,
-                      pointers: { ...f.pointers, character_id: ev.target.value || null },
+                      pointers: { ...f.pointers, final_holder_character_id: ev.target.value || null },
                     }))
                   }
                 >
@@ -236,10 +260,7 @@ export default function EvidenceTab() {
                 </button>
               )}
               <button type="button" className="btn-secondary" onClick={() => setModal(null)}>
-                キャンセル
-              </button>
-              <button type="button" className="btn-primary" onClick={save}>
-                保存
+                閉じる
               </button>
             </div>
           </div>

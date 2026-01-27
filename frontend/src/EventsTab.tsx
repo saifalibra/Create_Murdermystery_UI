@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useAutoSave } from "./useAutoSave";
 
 type Event = {
   id: string;
@@ -37,6 +38,7 @@ export default function EventsTab() {
     location_ids: [],
     participants: [],
   });
+  const isInitialMount = useRef(true);
 
   const fetchData = async () => {
     try {
@@ -66,49 +68,74 @@ export default function EventsTab() {
   }, []);
 
   const openAdd = () => {
+    const newId = `ev_${Date.now()}`;
     setForm({
-      id: `ev_${Date.now()}`,
+      id: newId,
       title: "",
       content: "",
       time_range: { start: defaultTime(), end: defaultEnd() },
       location_ids: [],
       participants: [],
     });
-    setEditId(null);
+    setEditId(newId);
     setModal("add");
+    isInitialMount.current = true;
+    // 追加時は即座に作成
+    fetch("/api/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: newId,
+        title: "",
+        content: "",
+        time_range: { start: defaultTime(), end: defaultEnd() },
+        location_ids: [],
+        participants: [],
+      }),
+    })
+      .then(() => fetchData())
+      .catch((e) => console.error("Failed to create:", e));
   };
 
   const openEdit = (e: Event) => {
     setForm({ ...e });
     setEditId(e.id);
     setModal("edit");
+    isInitialMount.current = true;
   };
 
   const save = async () => {
+    if (!editId) return;
     try {
-      const body = {
-        ...form,
-        time_range: form.time_range,
-      };
-      if (modal === "add") {
-        await fetch("/api/events", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-      } else {
-        await fetch(`/api/events/${editId}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-      }
+      const body = { ...form, time_range: form.time_range };
+      await fetch(`/api/events/${editId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
       await fetchData();
-      setModal(null);
     } catch (e) {
       alert(e instanceof Error ? e.message : "保存に失敗しました");
     }
   };
+
+  // 自動保存（追加・編集とも）
+  useAutoSave(
+    form,
+    async () => {
+      if (editId && !isInitialMount.current) await save();
+    },
+    500
+  );
+
+  useEffect(() => {
+    if (isInitialMount.current && modal) {
+      const timer = setTimeout(() => {
+        isInitialMount.current = false;
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [modal]);
 
   const remove = async (id: string) => {
     if (!confirm("削除しますか？")) return;
@@ -193,15 +220,6 @@ export default function EventsTab() {
               <button type="button" className="modal-close" onClick={() => setModal(null)}>×</button>
             </div>
             <div className="modal-body">
-              <div className="form-group">
-                <label>ID</label>
-                <input
-                  className="form-control"
-                  value={form.id}
-                  onChange={(e) => setForm((f) => ({ ...f, id: e.target.value }))}
-                  disabled={modal === "edit"}
-                />
-              </div>
               <div className="form-group">
                 <label>タイトル</label>
                 <input
@@ -293,10 +311,7 @@ export default function EventsTab() {
                 </button>
               )}
               <button type="button" className="btn-secondary" onClick={() => setModal(null)}>
-                キャンセル
-              </button>
-              <button type="button" className="btn-primary" onClick={save}>
-                保存
+                閉じる
               </button>
             </div>
           </div>

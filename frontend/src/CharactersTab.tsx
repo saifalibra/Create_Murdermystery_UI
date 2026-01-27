@@ -1,25 +1,46 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useAutoSave } from "./useAutoSave";
+
+type Relation = {
+  to: string;
+  label: string;
+  strength: number;
+};
 
 type Character = {
   id: string;
   name: string;
   role?: string;
   bio?: string | null;
-  relations?: unknown[];
+  relations?: Relation[];
   secret_ids?: string[];
 };
 
 export default function CharactersTab() {
   const [list, setList] = useState<Character[]>([]);
+  const [secrets, setSecrets] = useState<{ id: string; character_id: string; description: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<"add" | "edit" | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
-  const [form, setForm] = useState({ id: "", name: "", role: "player" });
+  const [form, setForm] = useState({
+    id: "",
+    name: "",
+    role: "player",
+    bio: "",
+    relations: [] as Relation[],
+    secret_ids: [] as string[],
+  });
+  const [editingRelation, setEditingRelation] = useState<Relation | null>(null);
+  const isInitialMount = useRef(true);
 
   const fetchList = async () => {
     try {
-      const res = await fetch("/api/characters");
-      if (res.ok) setList(await res.json());
+      const [charRes, secRes] = await Promise.all([
+        fetch("/api/characters"),
+        fetch("/api/secrets"),
+      ]);
+      if (charRes.ok) setList(await charRes.json());
+      if (secRes.ok) setSecrets(await secRes.json());
     } catch (e) {
       console.error(e);
     } finally {
@@ -32,44 +53,139 @@ export default function CharactersTab() {
   }, []);
 
   const openAdd = () => {
-    setForm({ id: `ch_${Date.now()}`, name: "", role: "player" });
-    setEditId(null);
+    const newId = `ch_${Date.now()}`;
+    setForm({
+      id: newId,
+      name: "",
+      role: "player",
+      bio: "",
+      relations: [],
+      secret_ids: [],
+    });
+    setEditId(newId);
     setModal("add");
+    isInitialMount.current = true;
+    // 追加時は即座に作成
+    fetch("/api/characters", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: newId,
+        name: "",
+        role: "player",
+        bio: null,
+        relations: [],
+        secret_ids: [],
+      }),
+    })
+      .then(() => fetchList())
+      .catch((e) => console.error("Failed to create:", e));
   };
 
   const openEdit = (c: Character) => {
-    setForm({ id: c.id, name: c.name, role: (c.role as string) || "player" });
+    setForm({
+      id: c.id,
+      name: c.name,
+      role: (c.role as string) || "player",
+      bio: c.bio || "",
+      relations: (c.relations as Relation[]) || [],
+      secret_ids: c.secret_ids || [],
+    });
     setEditId(c.id);
     setModal("edit");
+    isInitialMount.current = true;
   };
 
   const save = async () => {
+    if (!editId) return;
     try {
-      const existing = modal === "edit" ? list.find((x) => x.id === editId) : null;
-      if (modal === "add") {
-        await fetch("/api/characters", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...form, relations: [], secret_ids: [] }),
-        });
-      } else if (existing) {
-        const body = {
-          ...existing,
-          ...form,
-          relations: existing.relations ?? [],
-          secret_ids: existing.secret_ids ?? [],
-        };
-        await fetch(`/api/characters/${editId}`, {
+      const existing = list.find((x) => x.id === editId) ?? null;
+      const body = {
+        ...existing,
+        id: editId,
+        name: form.name,
+        role: form.role,
+        bio: form.bio || null,
+        relations: form.relations,
+        secret_ids: form.secret_ids,
+      };
+      await fetch(`/api/characters/${editId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const prevIds = new Set((existing?.secret_ids ?? []) as string[]);
+      const nextIds = new Set(form.secret_ids);
+      for (const s of secrets) {
+        const had = prevIds.has(s.id);
+        const has = nextIds.has(s.id);
+        const hid = new Set(s.hidden_from_character_ids ?? []);
+        if (has && !hid.has(editId)) continue;
+        if (has) {
+          hid.delete(editId);
+        } else if (had) {
+          hid.add(editId);
+        } else continue;
+        await fetch(`/api/secrets/${s.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
+          body: JSON.stringify({
+            ...s,
+            hidden_from_character_ids: [...hid],
+          }),
         });
       }
       await fetchList();
-      setModal(null);
     } catch (e) {
       alert(e instanceof Error ? e.message : "保存に失敗しました");
     }
+  };
+
+  // 自動保存（追加・編集とも）
+  useAutoSave(
+    form,
+    async () => {
+      if (editId && !isInitialMount.current) await save();
+    },
+    500
+  );
+
+  useEffect(() => {
+    if (isInitialMount.current && modal) {
+      const timer = setTimeout(() => {
+        isInitialMount.current = false;
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [modal]);
+
+  const addRelation = () => {
+    setEditingRelation({ to: "", label: "friend", strength: 0.5 });
+  };
+
+  const saveRelation = () => {
+    if (!editingRelation || !editingRelation.to) return;
+    setForm((f) => ({
+      ...f,
+      relations: [...f.relations, editingRelation],
+    }));
+    setEditingRelation(null);
+  };
+
+  const removeRelation = (index: number) => {
+    setForm((f) => ({
+      ...f,
+      relations: f.relations.filter((_, i) => i !== index),
+    }));
+  };
+
+  const toggleSecret = (secretId: string) => {
+    setForm((f) => ({
+      ...f,
+      secret_ids: f.secret_ids.includes(secretId)
+        ? f.secret_ids.filter((id) => id !== secretId)
+        : [...f.secret_ids, secretId],
+    }));
   };
 
   const remove = async (id: string) => {
@@ -96,22 +212,24 @@ export default function CharactersTab() {
       {list.length === 0 ? (
         <div className="empty-state">キャラクターがありません。「追加」で登録してください。</div>
       ) : (
-        <div className="characters-grid">
+        <div className="unified-card-grid">
           {list.map((c) => (
             <div
               key={c.id}
-              className="character-card"
+              className="unified-card"
               onClick={() => openEdit(c)}
               role="button"
               tabIndex={0}
               onKeyDown={(e) => e.key === "Enter" && openEdit(c)}
             >
-              <div className="character-avatar">{(c.name || "?")[0]}</div>
-              <div className="character-info">
-                <div className="character-name">{c.name || "(名前なし)"}</div>
-                <div className="character-id">{c.id}</div>
-                <div className="character-role">{(c.role as string) || "player"}</div>
-              </div>
+              <div className="location-name">{c.name || "(名前なし)"}</div>
+              <div className="location-type">{(c.role as string) || "player"}</div>
+              {c.bio && (
+                <p style={{ marginTop: "0.5rem", fontSize: "0.9rem", color: "#8b949e" }}>
+                  {c.bio.slice(0, 60)}
+                  {c.bio.length > 60 ? "…" : ""}
+                </p>
+              )}
             </div>
           ))}
         </div>
@@ -125,15 +243,6 @@ export default function CharactersTab() {
               <button type="button" className="modal-close" onClick={() => setModal(null)}>×</button>
             </div>
             <div className="modal-body">
-              <div className="form-group">
-                <label>ID</label>
-                <input
-                  className="form-control"
-                  value={form.id}
-                  onChange={(e) => setForm((f) => ({ ...f, id: e.target.value }))}
-                  disabled={modal === "edit"}
-                />
-              </div>
               <div className="form-group">
                 <label>名前</label>
                 <input
@@ -155,6 +264,146 @@ export default function CharactersTab() {
                   <option value="culprit">culprit</option>
                 </select>
               </div>
+              <div className="form-group">
+                <label>背景</label>
+                <textarea
+                  className="form-control"
+                  value={form.bio}
+                  onChange={(e) => setForm((f) => ({ ...f, bio: e.target.value }))}
+                  rows={4}
+                  placeholder="キャラクターの背景・プロフィール"
+                />
+              </div>
+              <div className="form-group">
+                <label>人間関係</label>
+                <div style={{ marginBottom: "0.5rem" }}>
+                  {form.relations.map((rel, idx) => {
+                    const targetChar = list.find((c) => c.id === rel.to);
+                    return (
+                      <div
+                        key={idx}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.5rem",
+                          padding: "0.5rem",
+                          background: "#21262d",
+                          borderRadius: 6,
+                          marginBottom: "0.5rem",
+                        }}
+                      >
+                        <span>{targetChar?.name || rel.to}</span>
+                        <span style={{ color: "#8b949e" }}>—</span>
+                        <span>{rel.label}</span>
+                        <span style={{ color: "#8b949e" }}>({rel.strength.toFixed(1)})</span>
+                        <button
+                          type="button"
+                          className="btn-danger"
+                          style={{ marginLeft: "auto", padding: "0.25rem 0.5rem", fontSize: "0.85rem" }}
+                          onClick={() => removeRelation(idx)}
+                        >
+                          削除
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                {!editingRelation ? (
+                  <button type="button" className="btn-secondary" onClick={addRelation}>
+                    関係を追加
+                  </button>
+                ) : (
+                  <div style={{ padding: "0.5rem", background: "#21262d", borderRadius: 6 }}>
+                    <div className="form-row">
+                      <div className="form-group" style={{ marginBottom: "0.5rem" }}>
+                        <label>対象キャラ</label>
+                        <select
+                          className="form-control"
+                          value={editingRelation.to}
+                          onChange={(e) =>
+                            setEditingRelation((r) => (r ? { ...r, to: e.target.value } : null))
+                          }
+                        >
+                          <option value="">選択</option>
+                          {list
+                            .filter((c) => c.id !== form.id && !form.relations.some((r) => r.to === c.id))
+                            .map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                      <div className="form-group" style={{ marginBottom: "0.5rem" }}>
+                        <label>関係タイプ</label>
+                        <select
+                          className="form-control"
+                          value={editingRelation.label}
+                          onChange={(e) =>
+                            setEditingRelation((r) => (r ? { ...r, label: e.target.value } : null))
+                          }
+                        >
+                          <option value="friend">friend</option>
+                          <option value="colleague">colleague</option>
+                          <option value="lover">lover</option>
+                          <option value="rival">rival</option>
+                          <option value="enemy">enemy</option>
+                          <option value="family">family</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="form-group" style={{ marginBottom: "0.5rem" }}>
+                      <label>強度: {editingRelation.strength.toFixed(1)}</label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.1"
+                        value={editingRelation.strength}
+                        onChange={(e) =>
+                          setEditingRelation((r) =>
+                            r ? { ...r, strength: parseFloat(e.target.value) } : null
+                          )
+                        }
+                        style={{ width: "100%" }}
+                      />
+                    </div>
+                    <div style={{ display: "flex", gap: "0.5rem" }}>
+                      <button type="button" className="btn-primary" onClick={saveRelation}>
+                        追加
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => setEditingRelation(null)}
+                      >
+                        キャンセル
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="form-group">
+                <label>秘密（複数選択可・秘密タブの「隠したい人物」と連動）</label>
+                <div className="checkbox-group">
+                  {secrets.map((s) => (
+                    <label key={s.id} className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={form.secret_ids.includes(s.id)}
+                        onChange={() => toggleSecret(s.id)}
+                      />
+                      {s.description.slice(0, 40)}
+                      {s.description.length > 40 ? "…" : ""}
+                    </label>
+                  ))}
+                  {secrets.length === 0 && (
+                    <div style={{ color: "#8b949e", fontSize: "0.9rem" }}>
+                      秘密タブで秘密を追加すると選択できます
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
             <div className="modal-footer">
               {modal === "edit" && editId && (
@@ -163,10 +412,7 @@ export default function CharactersTab() {
                 </button>
               )}
               <button type="button" className="btn-secondary" onClick={() => setModal(null)}>
-                キャンセル
-              </button>
-              <button type="button" className="btn-primary" onClick={save}>
-                保存
+                閉じる
               </button>
             </div>
           </div>

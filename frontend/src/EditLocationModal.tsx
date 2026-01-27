@@ -1,10 +1,12 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useAutoSave } from "./useAutoSave";
 import type { GraphNode, GraphEdge } from "./types";
 
 interface EditLocationModalProps {
   node: GraphNode;
   graphNodes: GraphNode[];
   graphEdges: GraphEdge[];
+  events: { id: string; title: string }[];
   onClose: () => void;
   onSaved: () => void;
   onDeletedFromGraph: () => void;
@@ -16,6 +18,7 @@ export default function EditLocationModal({
   node,
   graphNodes,
   graphEdges,
+  events,
   onClose,
   onSaved,
   onDeletedFromGraph,
@@ -23,7 +26,8 @@ export default function EditLocationModal({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [eventId, setEventId] = useState<string | null>(node.event_id || null);
+  const isInitialMount = useRef(true);
 
   const refId = node.reference_id;
   const sameRefNodes = graphNodes.filter((n) => n.reference_id === refId);
@@ -61,7 +65,6 @@ export default function EditLocationModal({
   const relatedNodes = graphNodes.filter((n) => relatedIds.has(n.node_id));
 
   const handleSave = async () => {
-    setSaving(true);
     try {
       const res = await fetch(`/api/locations/${refId}`, {
         method: "PUT",
@@ -69,14 +72,42 @@ export default function EditLocationModal({
         body: JSON.stringify({ id: refId, name }),
       });
       if (!res.ok) throw new Error("保存に失敗しました");
+      // イベントIDを更新
+      if (eventId !== node.event_id) {
+        for (const n of sameRefNodes) {
+          const updatedNode = { ...n, event_id: eventId || null };
+          await fetch(`/api/graph/nodes/${n.node_id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(updatedNode),
+          });
+        }
+      }
       onSaved();
-      onClose();
     } catch (e) {
       alert(e instanceof Error ? e.message : "保存に失敗しました");
-    } finally {
-      setSaving(false);
     }
   };
+
+  // 自動保存
+  useAutoSave(
+    { name, eventId },
+    async () => {
+      if (!isInitialMount.current) {
+        await handleSave();
+      }
+    },
+    500
+  );
+
+  useEffect(() => {
+    if (isInitialMount.current) {
+      const timer = setTimeout(() => {
+        isInitialMount.current = false;
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, []);
 
   const handleDeleteFromGraph = async () => {
     if (!confirm("グラフからこの場所を削除しますか？")) return;
@@ -148,6 +179,19 @@ export default function EditLocationModal({
               onChange={(e) => setName(e.target.value)}
             />
           </div>
+          <div className="form-group">
+            <label>イベント</label>
+            <select
+              className="form-control"
+              value={eventId || ""}
+              onChange={(e) => setEventId(e.target.value || null)}
+            >
+              <option value="">— 未設定 —</option>
+              {events.map((ev) => (
+                <option key={ev.id} value={ev.id}>{ev.title || ev.id}</option>
+              ))}
+            </select>
+          </div>
           {relatedNodes.length > 0 && (
             <div className="form-group">
               <label>関連事象（直接つながっているノード）</label>
@@ -173,12 +217,9 @@ export default function EditLocationModal({
           <button type="button" className="btn-danger" onClick={handleDeleteFromGraph}>
             グラフから削除
           </button>
-          <div style={{ display: "flex", gap: "0.5rem" }}>
-            <button type="button" className="btn-secondary" onClick={onClose}>キャンセル</button>
-            <button type="button" className="btn-primary" onClick={handleSave} disabled={saving}>
-              {saving ? "保存中…" : "保存"}
-            </button>
-          </div>
+          <button type="button" className="btn-secondary" onClick={onClose}>
+            閉じる
+          </button>
         </div>
       </div>
     </div>

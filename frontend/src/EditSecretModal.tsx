@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useAutoSave } from "./useAutoSave";
 import type { GraphNode, GraphEdge, Logic } from "./types";
 
 interface EditSecretModalProps {
@@ -8,6 +9,7 @@ interface EditSecretModalProps {
   logics: Logic[];
   nodeToLogic: Map<string, string>;
   characters: { id: string; name: string }[];
+  events: { id: string; title: string }[];
   onClose: () => void;
   onSaved: () => void;
   onDeletedFromGraph: () => void;
@@ -26,6 +28,7 @@ export default function EditSecretModal({
   logics,
   nodeToLogic,
   characters,
+  events,
   onClose,
   onSaved,
   onDeletedFromGraph,
@@ -37,9 +40,10 @@ export default function EditSecretModal({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<SecretApi | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [eventId, setEventId] = useState<string | null>(node.event_id || null);
   const [logicDetails, setLogicDetails] = useState<Record<string, string>>({});
   const logicDetailsInited = useRef(false);
+  const isInitialMount = useRef(true);
 
   const refId = node.reference_id;
   const sameRefNodes = graphNodes.filter((n) => n.reference_id === refId);
@@ -96,7 +100,6 @@ export default function EditSecretModal({
 
   const handleSave = async () => {
     if (!form) return;
-    setSaving(true);
     try {
       const res = await fetch(`/api/secrets/${refId}`, {
         method: "PUT",
@@ -111,14 +114,42 @@ export default function EditSecretModal({
           await updateLogicDetail(nod.node_id, logicId, text);
         }
       }
+      // イベントIDを更新
+      if (eventId !== node.event_id) {
+        for (const n of sameRefNodes) {
+          const updatedNode = { ...n, event_id: eventId || null };
+          await fetch(`/api/graph/nodes/${n.node_id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(updatedNode),
+          });
+        }
+      }
       onSaved();
-      onClose();
     } catch (e) {
       alert(e instanceof Error ? e.message : "保存に失敗しました");
-    } finally {
-      setSaving(false);
     }
   };
+
+  // 自動保存（formとeventId）
+  useAutoSave(
+    { form, eventId },
+    async () => {
+      if (!isInitialMount.current && form) {
+        await handleSave();
+      }
+    },
+    500
+  );
+
+  useEffect(() => {
+    if (isInitialMount.current) {
+      const timer = setTimeout(() => {
+        isInitialMount.current = false;
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, []);
 
   const handleDeleteFromGraph = async () => {
     if (!confirm("グラフからこの秘密を削除しますか？")) return;
@@ -225,6 +256,19 @@ export default function EditSecretModal({
               rows={3}
             />
           </div>
+          <div className="form-group">
+            <label>イベント</label>
+            <select
+              className="form-control"
+              value={eventId || ""}
+              onChange={(e) => setEventId(e.target.value || null)}
+            >
+              <option value="">— 未設定 —</option>
+              {events.map((ev) => (
+                <option key={ev.id} value={ev.id}>{ev.title || ev.id}</option>
+              ))}
+            </select>
+          </div>
           {Array.from(logicIds).length > 0 && (
             <div className="form-group">
               <label>ロジックごとの情報</label>
@@ -287,12 +331,9 @@ export default function EditSecretModal({
               削除
             </button>
           </div>
-          <div style={{ display: "flex", gap: "0.5rem" }}>
-            <button type="button" className="btn-secondary" onClick={onClose}>キャンセル</button>
-            <button type="button" className="btn-primary" onClick={handleSave} disabled={saving}>
-              {saving ? "保存中…" : "保存"}
-            </button>
-          </div>
+          <button type="button" className="btn-secondary" onClick={onClose}>
+            閉じる
+          </button>
         </div>
       </div>
     </div>

@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useAutoSave } from "./useAutoSave";
 import type { GraphNode, GraphEdge } from "./types";
 
 interface EditEvidenceModalProps {
@@ -7,6 +8,7 @@ interface EditEvidenceModalProps {
   graphEdges: GraphEdge[];
   locations: { id: string; name: string }[];
   characters: { id: string; name: string }[];
+  events: { id: string; title: string }[];
   onClose: () => void;
   onSaved: () => void;
   onDeletedFromGraph: () => void;
@@ -17,7 +19,13 @@ type EvidenceApi = {
   name: string;
   summary: string;
   detail: string;
-  pointers?: { location_id?: string | null; character_id?: string | null; [k: string]: unknown };
+  pointers?: {
+    location_id?: string | null;
+    character_id?: string | null;
+    final_location_id?: string | null;
+    final_holder_character_id?: string | null;
+    [k: string]: unknown;
+  };
   [k: string]: unknown;
 };
 
@@ -27,6 +35,7 @@ export default function EditEvidenceModal({
   graphEdges,
   locations,
   characters,
+  events,
   onClose,
   onSaved,
   onDeletedFromGraph,
@@ -34,7 +43,8 @@ export default function EditEvidenceModal({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<EvidenceApi | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [eventId, setEventId] = useState<string | null>(node.event_id || null);
+  const isInitialMount = useRef(true);
 
   const refId = node.reference_id;
 
@@ -75,7 +85,6 @@ export default function EditEvidenceModal({
 
   const handleSave = async () => {
     if (!form) return;
-    setSaving(true);
     try {
       const res = await fetch(`/api/evidence/${refId}`, {
         method: "PUT",
@@ -83,14 +92,42 @@ export default function EditEvidenceModal({
         body: JSON.stringify(form),
       });
       if (!res.ok) throw new Error("保存に失敗しました");
+      // イベントIDを更新
+      if (eventId !== node.event_id) {
+        for (const n of sameRefNodes) {
+          const updatedNode = { ...n, event_id: eventId || null };
+          await fetch(`/api/graph/nodes/${n.node_id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(updatedNode),
+          });
+        }
+      }
       onSaved();
-      onClose();
     } catch (e) {
       alert(e instanceof Error ? e.message : "保存に失敗しました");
-    } finally {
-      setSaving(false);
     }
   };
+
+  // 自動保存
+  useAutoSave(
+    form,
+    async (value) => {
+      if (!isInitialMount.current && value) {
+        await handleSave();
+      }
+    },
+    500
+  );
+
+  useEffect(() => {
+    if (isInitialMount.current) {
+      const timer = setTimeout(() => {
+        isInitialMount.current = false;
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, []);
 
   const handleDeleteFromGraph = async () => {
     if (!confirm("グラフからこの証拠を削除しますか？")) return;
@@ -185,14 +222,14 @@ export default function EditEvidenceModal({
             />
           </div>
           <div className="form-group">
-            <label>発見場所</label>
+            <label>最終場所</label>
             <select
               className="form-control"
-              value={pointers.location_id ?? ""}
+              value={pointers.final_location_id ?? ""}
               onChange={(e) =>
                 setForm({
                   ...form,
-                  pointers: { ...pointers, location_id: e.target.value || null },
+                  pointers: { ...pointers, final_location_id: e.target.value || null },
                 })
               }
             >
@@ -203,20 +240,33 @@ export default function EditEvidenceModal({
             </select>
           </div>
           <div className="form-group">
-            <label>発見人物</label>
+            <label>最終所持者</label>
             <select
               className="form-control"
-              value={pointers.character_id ?? ""}
+              value={pointers.final_holder_character_id ?? ""}
               onChange={(e) =>
                 setForm({
                   ...form,
-                  pointers: { ...pointers, character_id: e.target.value || null },
+                  pointers: { ...pointers, final_holder_character_id: e.target.value || null },
                 })
               }
             >
               <option value="">— 未設定 —</option>
               {characters.map((c) => (
                 <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="form-group">
+            <label>イベント</label>
+            <select
+              className="form-control"
+              value={eventId || ""}
+              onChange={(e) => setEventId(e.target.value || null)}
+            >
+              <option value="">— 未設定 —</option>
+              {events.map((ev) => (
+                <option key={ev.id} value={ev.id}>{ev.title || ev.id}</option>
               ))}
             </select>
           </div>
@@ -245,12 +295,9 @@ export default function EditEvidenceModal({
           <button type="button" className="btn-danger" onClick={handleDeleteFromGraph}>
             グラフから削除
           </button>
-          <div style={{ display: "flex", gap: "0.5rem" }}>
-            <button type="button" className="btn-secondary" onClick={onClose}>キャンセル</button>
-            <button type="button" className="btn-primary" onClick={handleSave} disabled={saving}>
-              {saving ? "保存中…" : "保存"}
-            </button>
-          </div>
+          <button type="button" className="btn-secondary" onClick={onClose}>
+            閉じる
+          </button>
         </div>
       </div>
     </div>
