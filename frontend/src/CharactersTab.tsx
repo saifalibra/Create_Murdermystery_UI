@@ -18,7 +18,7 @@ type Character = {
 
 export default function CharactersTab() {
   const [list, setList] = useState<Character[]>([]);
-  const [secrets, setSecrets] = useState<{ id: string; character_id: string; description: string }[]>([]);
+  const [secrets, setSecrets] = useState<{ id: string; character_id: string; title?: string; description: string; hidden_from_character_ids?: string[] }[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<"add" | "edit" | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
@@ -386,17 +386,20 @@ export default function CharactersTab() {
               <div className="form-group">
                 <label>秘密（複数選択可・秘密タブの「隠したい人物」と連動）</label>
                 <div className="checkbox-group">
-                  {secrets.map((s) => (
-                    <label key={s.id} className="checkbox-label">
-                      <input
-                        type="checkbox"
-                        checked={form.secret_ids.includes(s.id)}
-                        onChange={() => toggleSecret(s.id)}
-                      />
-                      {s.description.slice(0, 40)}
-                      {s.description.length > 40 ? "…" : ""}
-                    </label>
-                  ))}
+                  {secrets.map((s) => {
+                    const label = s.title || s.description || "(無題)";
+                    return (
+                      <label key={s.id} className="checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={form.secret_ids.includes(s.id)}
+                          onChange={() => toggleSecret(s.id)}
+                        />
+                        {label.slice(0, 40)}
+                        {label.length > 40 ? "…" : ""}
+                      </label>
+                    );
+                  })}
                   {secrets.length === 0 && (
                     <div style={{ color: "#8b949e", fontSize: "0.9rem" }}>
                       秘密タブで秘密を追加すると選択できます

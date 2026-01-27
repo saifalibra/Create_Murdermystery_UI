@@ -4,6 +4,7 @@ import { useAutoSave } from "./useAutoSave";
 type Secret = {
   id: string;
   character_id: string;
+  title?: string;
   description: string;
   hidden_from_character_ids?: string[];
 };
@@ -17,6 +18,7 @@ export default function SecretsTab() {
   const [form, setForm] = useState<Secret>({
     id: "",
     character_id: "",
+    title: "",
     description: "",
     hidden_from_character_ids: [],
   });
@@ -50,6 +52,7 @@ export default function SecretsTab() {
     setForm({
       id: newId,
       character_id: "",
+      title: "",
       description: "",
       hidden_from_character_ids: defaultHidden,
     });
@@ -62,6 +65,7 @@ export default function SecretsTab() {
       body: JSON.stringify({
         id: newId,
         character_id: "",
+        title: "",
         description: "",
         hidden_from_character_ids: defaultHidden,
       }),
@@ -188,6 +192,9 @@ export default function SecretsTab() {
               onKeyDown={(e) => e.key === "Enter" && openEdit(s)}
             >
               <div className="location-name">
+                {s.title || "(タイトルなし)"}
+              </div>
+              <div style={{ marginTop: "0.25rem", fontSize: "0.85rem", color: "#8b949e" }}>
                 隠す: {characters.filter((c) => (s.hidden_from_character_ids ?? []).includes(c.id)).map((c) => c.name).join(", ") || "—"}
               </div>
               {s.description && (
@@ -209,6 +216,15 @@ export default function SecretsTab() {
               <button type="button" className="modal-close" onClick={() => setModal(null)}>×</button>
             </div>
             <div className="modal-body">
+              <div className="form-group">
+                <label>タイトル</label>
+                <input
+                  className="form-control"
+                  value={form.title ?? ""}
+                  onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+                  placeholder="短い見出し"
+                />
+              </div>
               <div className="form-group">
                 <label>説明</label>
                 <textarea

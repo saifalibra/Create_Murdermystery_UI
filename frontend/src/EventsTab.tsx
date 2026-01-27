@@ -203,8 +203,16 @@ export default function EventsTab() {
                   <td>{e.title || "(無題)"}</td>
                   <td>{(e.time_range?.start ?? "").slice(0, 16)}</td>
                   <td>{(e.time_range?.end ?? "").slice(0, 16)}</td>
-                  <td>{(e.location_ids ?? []).join(", ") || "—"}</td>
-                  <td>{(e.participants ?? []).join(", ") || "—"}</td>
+                  <td>
+                    {(e.location_ids ?? [])
+                      .map((lid) => locations.find((l) => l.id === lid)?.name || lid)
+                      .join(", ") || "—"}
+                  </td>
+                  <td>
+                    {(e.participants ?? [])
+                      .map((pid) => characters.find((c) => c.id === pid)?.name || pid)
+                      .join(", ") || "—"}
+                  </td>
                 </tr>
               ))}
             </tbody>

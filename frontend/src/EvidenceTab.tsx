@@ -217,40 +217,43 @@ export default function EvidenceTab() {
                 />
               </div>
               <div className="form-group">
-                <label>最終場所</label>
-                <select
-                  className="form-control"
-                  value={form.pointers?.final_location_id ?? ""}
-                  onChange={(ev) =>
-                    setForm((f) => ({
-                      ...f,
-                      pointers: { ...f.pointers, final_location_id: ev.target.value || null },
-                    }))
-                  }
-                >
-                  <option value="">— 未設定 —</option>
-                  {locations.map((loc) => (
-                    <option key={loc.id} value={loc.id}>{loc.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="form-group">
-                <label>最終所持者</label>
-                <select
-                  className="form-control"
-                  value={form.pointers?.final_holder_character_id ?? ""}
-                  onChange={(ev) =>
-                    setForm((f) => ({
-                      ...f,
-                      pointers: { ...f.pointers, final_holder_character_id: ev.target.value || null },
-                    }))
-                  }
-                >
-                  <option value="">— 未設定 —</option>
-                  {characters.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
+                <label>最終場所と所持者</label>
+                <div className="form-row" style={{ gap: "0.75rem" }}>
+                  <div style={{ flex: 1 }}>
+                    <select
+                      className="form-control"
+                      value={form.pointers?.final_location_id ?? ""}
+                      onChange={(ev) =>
+                        setForm((f) => ({
+                          ...f,
+                          pointers: { ...f.pointers, final_location_id: ev.target.value || null },
+                        }))
+                      }
+                    >
+                      <option value="">場所 —</option>
+                      {locations.map((loc) => (
+                        <option key={loc.id} value={loc.id}>{loc.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <select
+                      className="form-control"
+                      value={form.pointers?.final_holder_character_id ?? ""}
+                      onChange={(ev) =>
+                        setForm((f) => ({
+                          ...f,
+                          pointers: { ...f.pointers, final_holder_character_id: ev.target.value || null },
+                        }))
+                      }
+                    >
+                      <option value="">所持者 —</option>
+                      {characters.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
               </div>
             </div>
             <div className="modal-footer">

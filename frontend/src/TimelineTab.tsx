@@ -156,7 +156,7 @@ function TimelineEventEditModal({
 }
 
 export default function TimelineTab() {
-  const [timelines, setTimelines] = useState<CharacterTimeline[]>([]);
+  const [, setTimelines] = useState<CharacterTimeline[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
   const [characters, setCharacters] = useState<{ id: string; name: string }[]>([]);
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
@@ -254,10 +254,6 @@ export default function TimelineTab() {
       const timeIndex = Math.floor((y + scrollTop - headerHeight) / cellHeight);
 
       if (locationIndex >= 0 && locationIndex < locations.length && timeIndex >= 0 && timeIndex < TIME_SLOTS.length) {
-        const currentLocationId = locations[locationIndex].id;
-        const currentTimeSlot = TIME_SLOTS[timeIndex];
-        const currentCell = { locationId: currentLocationId, timeSlot: currentTimeSlot };
-
         const startLocIdx = locations.findIndex((l) => l.id === dragStart.locationId);
         const startTimeIdx = TIME_SLOTS.indexOf(dragStart.timeSlot);
         const endLocIdx = locationIndex;
@@ -356,7 +352,67 @@ export default function TimelineTab() {
     });
   };
 
-  const charName = (cid: string) => characters.find((c) => c.id === cid)?.name ?? cid;
+  // イベントごとに、各場所での時間範囲を計算
+  const getEventRanges = (event: Event): Map<string, { startSlot: string; endSlot: string }> => {
+    const ranges = new Map<string, { startSlot: string; endSlot: string }>();
+    const start = new Date(event.time_range.start);
+    const end = new Date(event.time_range.end);
+    
+    event.location_ids.forEach((locId) => {
+      const slots: string[] = [];
+      TIME_SLOTS.forEach((slot) => {
+        const [h, m] = slot.split(":").map(Number);
+        const slotTime = new Date(start);
+        slotTime.setHours(h, m, 0, 0);
+        if (slotTime >= start && slotTime < end) {
+          slots.push(slot);
+        }
+      });
+      if (slots.length > 0) {
+        ranges.set(locId, { startSlot: slots[0], endSlot: slots[slots.length - 1] });
+      }
+    });
+    return ranges;
+  };
+
+  // セルがイベントの開始セルかどうか（rowspanの開始位置）
+  const isEventStartCell = (event: Event, locationId: string, timeSlot: string): boolean => {
+    const ranges = getEventRanges(event);
+    const range = ranges.get(locationId);
+    if (!range) return false;
+    return range.startSlot === timeSlot;
+  };
+
+  // イベントのrowspanを計算（同じ場所での時間スロット数）
+  const getEventRowspan = (event: Event, locationId: string): number => {
+    const ranges = getEventRanges(event);
+    const range = ranges.get(locationId);
+    if (!range) return 1;
+    const startIdx = TIME_SLOTS.indexOf(range.startSlot);
+    const endIdx = TIME_SLOTS.indexOf(range.endSlot);
+    return endIdx - startIdx + 1;
+  };
+
+  // セルがrowspanで覆われているかどうか（他のイベントのrowspanで覆われている）
+  const isCellCoveredByRowspan = (locationId: string, timeSlot: string): boolean => {
+    for (const ev of events) {
+      if (!ev.location_ids.includes(locationId)) continue;
+      // このセルがイベントの開始セルでない場合のみチェック
+      if (isEventStartCell(ev, locationId, timeSlot)) continue;
+      const ranges = getEventRanges(ev);
+      const range = ranges.get(locationId);
+      if (!range) continue;
+      const startIdx = TIME_SLOTS.indexOf(range.startSlot);
+      const endIdx = TIME_SLOTS.indexOf(range.endSlot);
+      const currentIdx = TIME_SLOTS.indexOf(timeSlot);
+      // 開始セルより後で、終了セル以前の場合、rowspanで覆われている
+      if (currentIdx > startIdx && currentIdx <= endIdx) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   const locName = (lid: string) => locations.find((l) => l.id === lid)?.name ?? lid;
 
   if (loading) return <div className="loading">読み込み中…</div>;
@@ -456,6 +512,25 @@ export default function TimelineTab() {
                     const cellKey = getCellKey(loc.id, timeSlot);
                     const isSelected = selectedCells.has(cellKey);
                     const cellEvents = getEventsInCell(loc.id, timeSlot);
+                    const isCovered = isCellCoveredByRowspan(loc.id, timeSlot);
+                    // このセルが開始セルであるイベントのみ表示（rowspanで結合）
+                    const startEvents = cellEvents.filter((ev) => isEventStartCell(ev, loc.id, timeSlot));
+                    
+                    // rowspanで覆われているセルは空にする（rowspanで結合されているため）
+                    if (isCovered) {
+                      return (
+                        <td
+                          key={loc.id}
+                          style={{
+                            padding: 0,
+                            border: "1px solid #30363d",
+                            background: isSelected ? "#1f6feb40" : "#0d1117",
+                            height: "40px",
+                          }}
+                        />
+                      );
+                    }
+                    
                     return (
                       <td
                         key={loc.id}
@@ -466,34 +541,43 @@ export default function TimelineTab() {
                           height: "40px",
                           cursor: "pointer",
                           position: "relative",
+                          verticalAlign: "top",
                         }}
                         onMouseDown={() => handleMouseDown(loc.id, timeSlot)}
+                        rowSpan={startEvents.length > 0 ? getEventRowspan(startEvents[0], loc.id) : undefined}
                       >
-                        {cellEvents.map((ev) => (
-                          <div
-                            key={ev.id}
-                            role="button"
-                            tabIndex={0}
-                            onMouseDown={(e) => e.stopPropagation()}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditEvent(ev);
-                            }}
-                            onKeyDown={(e) => e.key === "Enter" && setEditEvent(ev)}
-                            style={{
-                              background: "#1f6feb",
-                              color: "#fff",
-                              padding: "0.25rem 0.5rem",
-                              fontSize: "0.85rem",
-                              borderRadius: 4,
-                              margin: "0.1rem",
-                              cursor: "pointer",
-                            }}
-                            title={ev.title}
-                          >
-                            {ev.title || "(無題)"}
-                          </div>
-                        ))}
+                        {startEvents.map((ev) => {
+                          const rowspan = getEventRowspan(ev, loc.id);
+                          return (
+                            <div
+                              key={ev.id}
+                              role="button"
+                              tabIndex={0}
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditEvent(ev);
+                              }}
+                              onKeyDown={(e) => e.key === "Enter" && setEditEvent(ev)}
+                              style={{
+                                background: "#1f6feb",
+                                color: "#fff",
+                                padding: "0.25rem 0.5rem",
+                                fontSize: "0.85rem",
+                                borderRadius: 4,
+                                margin: "0.1rem",
+                                cursor: "pointer",
+                                minHeight: `${rowspan * 40 - 4}px`,
+                                height: "100%",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                              title={ev.title}
+                            >
+                              {ev.title || "(無題)"}
+                            </div>
+                          );
+                        })}
                       </td>
                     );
                   })}

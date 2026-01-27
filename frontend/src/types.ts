@@ -4,13 +4,27 @@ export interface Logic {
   color?: string | null;
 }
 
+/** ノードタイプ */
+export type NodeType = "Evidence" | "Secret" | "Location" | "Character";
+
 export interface GraphNode {
   node_id: string;
-  node_type: string;
+  node_type: NodeType;
   reference_id: string;
   event_id?: string | null;
   logic_details: Record<string, string>;
   logic_related_entities: Record<string, string[]>;
+}
+
+/** React Flow ノードの data プロパティの型 */
+export interface GraphNodeData {
+  label: string | React.ReactNode;
+  node: GraphNode | null; // イベントグループ親ノードの場合は null
+  color?: string;
+  isEventGroup?: boolean;
+  eventId?: string; // イベントグループ親ノードの場合のみ
+  parentId?: string; // イベントグループ子ノードの場合のみ
+  logicName?: string;
 }
 
 export interface GraphEdge {
@@ -33,6 +47,7 @@ export interface EvidenceItem {
 export interface SecretItem {
   id: string;
   character_id: string;
+  title?: string;
   description: string;
 }
 

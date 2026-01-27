@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useAutoSave } from "./useAutoSave";
 import type { GraphNode, GraphEdge, Logic } from "./types";
 
@@ -17,9 +17,10 @@ interface EditSecretModalProps {
   updateLogicDetail: (nodeId: string, logicId: string, detailText: string) => Promise<void>;
   getLogicColor: (logicId: string, logics: Logic[]) => string;
   getLogicName: (logicId: string, logics: Logic[]) => string;
+  getNodeLabel: (node: GraphNode) => string;
 }
 
-type SecretApi = { id: string; character_id: string; description: string; [k: string]: unknown };
+type SecretApi = { id: string; character_id: string; title?: string; description: string; [k: string]: unknown };
 
 export default function EditSecretModal({
   node,
@@ -36,6 +37,7 @@ export default function EditSecretModal({
   updateLogicDetail,
   getLogicColor,
   getLogicName,
+  getNodeLabel,
 }: EditSecretModalProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -83,20 +85,30 @@ export default function EditSecretModal({
     setLogicDetails(next);
   }, [loading, refId, sameRefNodes]);
 
-  const relatedIds = new Set<string>();
-  sameRefNodes.forEach((n) => {
-    graphEdges.forEach((e) => {
-      if (e.source_node_id === n.node_id) relatedIds.add(e.target_node_id);
-      if (e.target_node_id === n.node_id) relatedIds.add(e.source_node_id);
+  const logicIds = useMemo(() => {
+    const s = new Set<string>();
+    sameRefNodes.forEach((n) => {
+      const lid = nodeToLogic.get(n.node_id);
+      if (lid) s.add(lid);
     });
-  });
-  const relatedNodes = graphNodes.filter((n) => relatedIds.has(n.node_id));
+    return Array.from(s);
+  }, [sameRefNodes, nodeToLogic]);
 
-  const logicIds = new Set<string>();
-  sameRefNodes.forEach((n) => {
-    const lid = nodeToLogic.get(n.node_id);
-    if (lid) logicIds.add(lid);
-  });
+  const relatedByLogic = useMemo(() => {
+    const m = new Map<string, GraphNode[]>();
+    logicIds.forEach((logicId) => {
+      const nodesInLogic = sameRefNodes.filter((n) => nodeToLogic.get(n.node_id) === logicId);
+      const relatedIds = new Set<string>();
+      nodesInLogic.forEach((n) => {
+        graphEdges.forEach((e) => {
+          if (e.source_node_id === n.node_id) relatedIds.add(e.target_node_id);
+          if (e.target_node_id === n.node_id) relatedIds.add(e.source_node_id);
+        });
+      });
+      m.set(logicId, graphNodes.filter((n) => relatedIds.has(n.node_id)));
+    });
+    return m;
+  }, [logicIds, sameRefNodes, nodeToLogic, graphEdges, graphNodes]);
 
   const handleSave = async () => {
     if (!form) return;
@@ -190,6 +202,22 @@ export default function EditSecretModal({
     }
   };
 
+  const removeEdgeToNode = async (relatedNodeId: string) => {
+    try {
+      const toDelete = graphEdges.filter(
+        (e) =>
+          (sameRefNodes.some((n) => n.node_id === e.source_node_id) && e.target_node_id === relatedNodeId) ||
+          (sameRefNodes.some((n) => n.node_id === e.target_node_id) && e.source_node_id === relatedNodeId)
+      );
+      for (const e of toDelete) {
+        await fetch(`/api/graph/edges/${e.edge_id}`, { method: "DELETE" });
+      }
+      onSaved();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "接続の解除に失敗しました");
+    }
+  };
+
   if (loading) {
     return (
       <div className="modal-overlay" onClick={onClose}>
@@ -236,6 +264,16 @@ export default function EditSecretModal({
         </div>
         <div className="modal-body">
           <div className="form-group">
+            <label>タイトル</label>
+            <input
+              type="text"
+              className="form-control"
+              value={form.title || ""}
+              onChange={(e) => setForm({ ...form, title: e.target.value })}
+              placeholder="タイトルを入力..."
+            />
+          </div>
+          <div className="form-group">
             <label>キャラクター</label>
             <select
               className="form-control"
@@ -269,11 +307,20 @@ export default function EditSecretModal({
               ))}
             </select>
           </div>
-          {Array.from(logicIds).length > 0 && (
+          {logicIds.length > 0 && (
             <div className="form-group">
-              <label>ロジックごとの情報</label>
-              {Array.from(logicIds).map((logicId) => (
-                <div key={logicId} style={{ marginBottom: "1rem" }}>
+              <label>ロジックごとの詳細・関連事象</label>
+              {logicIds.map((logicId) => (
+                <div
+                  key={logicId}
+                  style={{
+                    marginBottom: "1.25rem",
+                    padding: "1rem",
+                    border: "1px solid #30363d",
+                    borderRadius: 8,
+                    background: "#0d1117",
+                  }}
+                >
                   <span
                     style={{
                       display: "inline-block",
@@ -287,38 +334,55 @@ export default function EditSecretModal({
                   >
                     {getLogicName(logicId, logics)}
                   </span>
-                  <textarea
-                    className="form-control"
-                    placeholder="このロジックでの説明を入力..."
-                    value={logicDetails[logicId] ?? ""}
-                    onChange={(e) =>
-                      setLogicDetails((prev) => ({ ...prev, [logicId]: e.target.value }))
-                    }
-                    rows={2}
-                    style={{ marginTop: "0.35rem" }}
-                  />
+                  <div style={{ marginTop: "0.5rem" }}>
+                    <label style={{ fontSize: "0.85rem", color: "#8b949e" }}>詳細</label>
+                    <textarea
+                      className="form-control"
+                      placeholder="このロジックでの説明を入力..."
+                      value={logicDetails[logicId] ?? ""}
+                      onChange={(e) =>
+                        setLogicDetails((prev) => ({ ...prev, [logicId]: e.target.value }))
+                      }
+                      rows={2}
+                      style={{ marginTop: "0.25rem" }}
+                    />
+                  </div>
+                  {(relatedByLogic.get(logicId) ?? []).length > 0 && (
+                    <div style={{ marginTop: "0.75rem" }}>
+                      <label style={{ fontSize: "0.85rem", color: "#8b949e", display: "block", marginBottom: "0.35rem" }}>
+                        関連事象
+                      </label>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                        {(relatedByLogic.get(logicId) ?? []).map((n) => (
+                          <span
+                            key={n.node_id}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "0.35rem",
+                              padding: "0.25rem 0.5rem",
+                              background: "#21262d",
+                              borderRadius: 6,
+                              fontSize: "0.9rem",
+                            }}
+                          >
+                            {getNodeLabel(n)}
+                            <button
+                              type="button"
+                              className="modal-close"
+                              style={{ padding: "0.1rem", fontSize: "1rem", lineHeight: 1 }}
+                              onClick={() => removeEdgeToNode(n.node_id)}
+                              title="接続を解除"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
-            </div>
-          )}
-          {relatedNodes.length > 0 && (
-            <div className="form-group">
-              <label>関連事象（直接つながっているノード）</label>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-                {relatedNodes.map((n) => (
-                  <span
-                    key={n.node_id}
-                    style={{
-                      padding: "0.25rem 0.5rem",
-                      background: "#21262d",
-                      borderRadius: 6,
-                      fontSize: "0.9rem",
-                    }}
-                  >
-                    {n.node_type}: {n.reference_id}
-                  </span>
-                ))}
-              </div>
             </div>
           )}
         </div>

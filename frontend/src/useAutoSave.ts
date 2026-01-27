@@ -11,7 +11,7 @@ export function useAutoSave<T>(
   saveFn: (value: T) => Promise<void> | void,
   delay: number = 500
 ) {
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isInitialMount = useRef(true);
 
   useEffect(() => {
