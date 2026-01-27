@@ -1,0 +1,196 @@
+{
+  "timeline": [
+    {
+      "start": "2025-12-30T05:04:07.887257+00:00",
+      "end": "2025-12-30T05:04:27.923686+00:00",
+      "groups": [
+        [
+          "FQVuOhE2IXTOX7xoRsNDT0e1Lj63",
+          "2nwaGPeFd0gJ37ca25A1re7NEiO2"
+        ]
+      ]
+    },
+    {
+      "start": "2025-12-30T05:04:46.356076+00:00",
+      "end": "2025-12-30T05:05:46.352892+00:00",
+      "groups": [
+        [
+          "2nwaGPeFd0gJ37ca25A1re7NEiO2",
+          "FQVuOhE2IXTOX7xoRsNDT0e1Lj63"
+        ]
+      ]
+    },
+    {
+      "start": "2025-12-30T05:05:56.379865+00:00",
+      "end": "2025-12-30T05:08:16.323590+00:00",
+      "groups": [
+        [
+          "2nwaGPeFd0gJ37ca25A1re7NEiO2",
+          "FQVuOhE2IXTOX7xoRsNDT0e1Lj63"
+        ]
+      ]
+    },
+    {
+      "start": "2025-12-30T05:08:26.338716+00:00",
+      "end": "2025-12-30T05:08:27.935173+00:00",
+      "groups": [
+        [
+          "2nwaGPeFd0gJ37ca25A1re7NEiO2",
+          "FQVuOhE2IXTOX7xoRsNDT0e1Lj63"
+        ]
+      ]
+    },
+    {
+      "start": "2025-12-30T05:08:37.978969+00:00",
+      "end": "2025-12-30T05:08:46.344658+00:00",
+      "groups": [
+        [
+          "FQVuOhE2IXTOX7xoRsNDT0e1Lj63",
+          "2nwaGPeFd0gJ37ca25A1re7NEiO2"
+        ]
+      ]
+    },
+    {
+      "start": "2025-12-30T05:08:56.358994+00:00",
+      "end": "2025-12-30T05:11:57.910842+00:00",
+      "groups": [
+        [
+          "2nwaGPeFd0gJ37ca25A1re7NEiO2",
+          "FQVuOhE2IXTOX7xoRsNDT0e1Lj63"
+        ]
+      ]
+    },
+    {
+      "start": "2025-12-30T05:12:07.976787+00:00",
+      "end": "2025-12-30T05:26:22.787827+00:00",
+      "groups": [
+        [
+          "OzXLj77VMUUgT6jscaZLCxwddaw2",
+          "FQVuOhE2IXTOX7xoRsNDT0e1Lj63",
+          "g5TINnWWvrhWtDixfVGrgh1nrrZ2",
+          "2nwaGPeFd0gJ37ca25A1re7NEiO2"
+        ]
+      ]
+    },
+    {
+      "start": "2025-12-30T05:26:36.384604+00:00",
+      "end": "2025-12-30T08:03:48.834653+00:00",
+      "groups": [
+        [
+          "OzXLj77VMUUgT6jscaZLCxwddaw2",
+          "2nwaGPeFd0gJ37ca25A1re7NEiO2",
+          "g5TINnWWvrhWtDixfVGrgh1nrrZ2",
+          "FQVuOhE2IXTOX7xoRsNDT0e1Lj63"
+        ]
+      ]
+    },
+    {
+      "start": "2025-12-30T08:03:58.853641+00:00",
+      "end": "2025-12-30T08:03:58.853641+00:00",
+      "groups": [
+        [
+          "OzXLj77VMUUgT6jscaZLCxwddaw2",
+          "FQVuOhE2IXTOX7xoRsNDT0e1Lj63"
+        ]
+      ]
+    },
+    {
+      "start": "2025-12-30T08:04:08.884865+00:00",
+      "end": "2025-12-30T08:04:08.884865+00:00",
+      "groups": [
+        [
+          "OzXLj77VMUUgT6jscaZLCxwddaw2",
+          "FQVuOhE2IXTOX7xoRsNDT0e1Lj63"
+        ]
+      ]
+    },
+    {
+      "start": "2025-12-30T08:04:19.014734+00:00",
+      "end": "2025-12-30T08:19:19.150344+00:00",
+      "groups": [
+        [
+          "OzXLj77VMUUgT6jscaZLCxwddaw2",
+          "2nwaGPeFd0gJ37ca25A1re7NEiO2",
+          "g5TINnWWvrhWtDixfVGrgh1nrrZ2",
+          "FQVuOhE2IXTOX7xoRsNDT0e1Lj63"
+        ]
+      ]
+    },
+    {
+      "start": "2025-12-30T08:19:36.431046+00:00",
+      "end": "2025-12-30T08:27:38.941731+00:00",
+      "groups": [
+        [
+          "OzXLj77VMUUgT6jscaZLCxwddaw2",
+          "2nwaGPeFd0gJ37ca25A1re7NEiO2",
+          "g5TINnWWvrhWtDixfVGrgh1nrrZ2",
+          "FQVuOhE2IXTOX7xoRsNDT0e1Lj63"
+        ]
+      ]
+    },
+    {
+      "start": "2025-12-30T08:27:49.042190+00:00",
+      "end": "2025-12-30T08:36:36.394845+00:00",
+      "groups": [
+        [
+          "OzXLj77VMUUgT6jscaZLCxwddaw2",
+          "2nwaGPeFd0gJ37ca25A1re7NEiO2",
+          "g5TINnWWvrhWtDixfVGrgh1nrrZ2",
+          "FQVuOhE2IXTOX7xoRsNDT0e1Lj63"
+        ]
+      ]
+    },
+    {
+      "start": "2025-12-30T08:37:19.088315+00:00",
+      "end": "2025-12-30T08:59:03.784844+00:00",
+      "groups": [
+        [
+          "OzXLj77VMUUgT6jscaZLCxwddaw2",
+          "2nwaGPeFd0gJ37ca25A1re7NEiO2",
+          "g5TINnWWvrhWtDixfVGrgh1nrrZ2",
+          "FQVuOhE2IXTOX7xoRsNDT0e1Lj63"
+        ]
+      ]
+    },
+    {
+      "start": "2025-12-30T08:59:16.427204+00:00",
+      "end": "2025-12-30T10:59:58.952867+00:00",
+      "groups": [
+        [
+          "OzXLj77VMUUgT6jscaZLCxwddaw2",
+          "2nwaGPeFd0gJ37ca25A1re7NEiO2",
+          "g5TINnWWvrhWtDixfVGrgh1nrrZ2",
+          "FQVuOhE2IXTOX7xoRsNDT0e1Lj63"
+        ]
+      ]
+    }
+  ],
+  "name_map": {
+    "FQVuOhE2IXTOX7xoRsNDT0e1Lj63": "あつき",
+    "OzXLj77VMUUgT6jscaZLCxwddaw2": "みっちー",
+    "2nwaGPeFd0gJ37ca25A1re7NEiO2": "iPhone16",
+    "g5TINnWWvrhWtDixfVGrgh1nrrZ2": "まい"
+  },
+  "characters": [
+    {
+      "id": "FQVuOhE2IXTOX7xoRsNDT0e1Lj63",
+      "name": "あつき"
+    },
+    {
+      "id": "OzXLj77VMUUgT6jscaZLCxwddaw2",
+      "name": "みっちー"
+    },
+    {
+      "id": "2nwaGPeFd0gJ37ca25A1re7NEiO2",
+      "name": "iPhone16"
+    },
+    {
+      "id": "g5TINnWWvrhWtDixfVGrgh1nrrZ2",
+      "name": "まい"
+    }
+  ],
+  "summary": {
+    "total_blocks": 15,
+    "total_characters": 4
+  }
+}

@@ -1,0 +1,17 @@
+# Web framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# Validation & schemas
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Data & storage
+python-multipart>=0.0.6
+
+# Optional: LLM / async HTTP (後でLLM連携時に利用)
+# httpx>=0.26.0
+# openai>=1.10.0
+
+# Dev
+python-dotenv>=1.0.0
