@@ -53,10 +53,8 @@ function TimelineEventEditModal({
   const [locationIds, setLocationIds] = useState<string[]>(event.location_ids ?? []);
   const [participants, setParticipants] = useState<string[]>(event.participants ?? []);
 
-  const toggleLoc = (id: string) => {
-    setLocationIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
+  const setEventLocation = (locId: string | null) => {
+    setLocationIds(locId ? [locId] : []);
   };
   const togglePart = (id: string) => {
     setParticipants((prev) =>
@@ -124,11 +122,25 @@ function TimelineEventEditModal({
             </div>
           </div>
           <div className="form-group">
-            <label>場所（複数可）</label>
-            <div className="checkbox-group">
+            <label>場所（1つのみ）</label>
+            <div className="checkbox-group" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+              <label className="checkbox-label">
+                <input
+                  type="radio"
+                  name="timeline-event-location"
+                  checked={locationIds.length === 0}
+                  onChange={() => setEventLocation(null)}
+                />
+                未設定
+              </label>
               {locations.map((loc) => (
                 <label key={loc.id} className="checkbox-label">
-                  <input type="checkbox" checked={locationIds.includes(loc.id)} onChange={() => toggleLoc(loc.id)} />
+                  <input
+                    type="radio"
+                    name="timeline-event-location"
+                    checked={locationIds[0] === loc.id}
+                    onChange={() => setEventLocation(loc.id)}
+                  />
                   {loc.name}
                 </label>
               ))}

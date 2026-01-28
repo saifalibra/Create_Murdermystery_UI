@@ -107,15 +107,22 @@ export default function SecretsTab() {
         if (r.ok) chars = await r.json();
       } catch (_) {}
       for (const c of chars) {
-        const ids = (c.secret_ids ?? []) as string[];
-        if (!ids.includes(editId)) continue;
-        if (!hidden.has(c.id)) continue;
-        const next = ids.filter((id) => id !== editId);
-        await fetch(`/api/characters/${c.id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...c, secret_ids: next }),
-        });
+        const ids = [...(c.secret_ids ?? [])] as string[];
+        const hasSecret = ids.includes(editId);
+        const shouldHave = hidden.has(c.id);
+        if (shouldHave && !hasSecret) {
+          await fetch(`/api/characters/${c.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...c, secret_ids: [...ids, editId] }),
+          });
+        } else if (!shouldHave && hasSecret) {
+          await fetch(`/api/characters/${c.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...c, secret_ids: ids.filter((id) => id !== editId) }),
+          });
+        }
       }
       await fetchList();
     } catch (e) {

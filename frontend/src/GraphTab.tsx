@@ -323,7 +323,9 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
     return m;
   }, [eventGroups, emptyEventInstances]);
 
-  /** ロジックごとの階層レイアウト: 分岐は左列に縦、同階層は横に並べる */
+  /** ロジックごとの階層レイアウト
+   * 大前提: ノードは重ならない。同じ階層は同じ y（横の位置を揃える）で、x は隙間を空けて割り当て。
+   */
   const logicLayout = useMemo(() => {
     const layout = new Map<string, { x: number; y: number }>();
     const logicIds = new Set<string>();
@@ -396,17 +398,12 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
         const ids = byLevel.get(L) ?? [];
         const branch = ids.filter((id) => branching.has(id));
         const rest = ids.filter((id) => !branching.has(id));
-        let col = 0;
+        const ordered = [...branch, ...rest];
 
-        branch.forEach((id) => {
-          pos.set(id, { x: logicBaseX + 0, y: L * (H + GAP) });
-        });
-        if (branch.length) col = 1;
-        rest.forEach((id) => {
+        ordered.forEach((id, col) => {
           pos.set(id, { x: logicBaseX + col * (W + GAP), y: L * (H + GAP) });
-          col++;
         });
-        maxCol = Math.max(maxCol, col);
+        maxCol = Math.max(maxCol, ordered.length);
       }
 
       pos.forEach((p, id) => layout.set(id, p));
@@ -428,24 +425,24 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
     const padding = 20;
     const headerHeight = 60;
     const nodeGap = 10;
+    const eventGap = 24;
+    const eventRowMaxY = 800;
 
-    // イベントグループを処理。キー "eventId::logicId"（空グループ含む）
-    mergedEventGroups.forEach((groupNodes, key) => {
-      const [eventId, logicId] = key.split("::");
-      const event = events.find((e) => e.id === eventId);
-      const groupNodeId = `event_group_${eventId}::${logicId}`;
+    let maxEventBottom = 0;
+    let maxRowWidth = 0;
 
-      const cols = Math.min(3, groupNodes.length);
-      const rows = Math.ceil(groupNodes.length / 3);
-      const groupWidth = Math.max(300, padding * 2 + cols * nodeWidth + (cols - 1) * nodeGap);
-      const groupHeight = Math.max(200, headerHeight + padding + rows * nodeHeight + (rows - 1) * nodeGap);
-
+    const placeEventGroup = (groupNodeId: string, groupWidth: number, groupHeight: number, eventId: string, logicId: string, groupNodes: GraphNode[]) => {
+      if (baseY + groupHeight > eventRowMaxY && maxRowWidth > 0) {
+        baseY = 0;
+        baseX += maxRowWidth + eventGap;
+        maxRowWidth = 0;
+      }
       nodes.push({
         id: groupNodeId,
         type: "custom",
         position: { x: baseX, y: baseY },
         data: {
-          label: `イベント: ${event?.title || eventId}`,
+          label: `イベント: ${events.find((e) => e.id === eventId)?.title || eventId}`,
           node: null,
           color: "#6b7280",
           isEventGroup: true,
@@ -455,7 +452,6 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
         width: groupWidth,
         height: groupHeight,
       });
-
       groupNodes.forEach((node, idx) => {
         processedNodeIds.add(node.node_id);
         const nLogicId = nodeToLogic.get(node.node_id);
@@ -481,12 +477,20 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
           draggable: false,
         });
       });
+      maxEventBottom = Math.max(maxEventBottom, baseY + groupHeight);
+      maxRowWidth = Math.max(maxRowWidth, groupWidth);
+      baseY += groupHeight + eventGap;
+    };
 
-      baseY += 250;
-      if (baseY > 800) {
-        baseY = 0;
-        baseX += 400;
-      }
+    // イベントグループを処理。キー "eventId::logicId"（空グループ含む）。重ならないよう groupWidth/groupHeight で配置。
+    mergedEventGroups.forEach((groupNodes, key) => {
+      const [eventId, logicId] = key.split("::");
+      const groupNodeId = `event_group_${eventId}::${logicId}`;
+      const cols = Math.min(3, groupNodes.length);
+      const rows = Math.ceil(groupNodes.length / 3);
+      const groupWidth = Math.max(300, padding * 2 + cols * nodeWidth + (cols - 1) * nodeGap);
+      const groupHeight = Math.max(200, headerHeight + padding + rows * nodeHeight + (rows - 1) * nodeGap);
+      placeEventGroup(groupNodeId, groupWidth, groupHeight, eventId, logicId, groupNodes);
     });
 
     // 空イベントグループ（events に存在するが内包ノードが0件のイベント）
@@ -500,29 +504,12 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
       const groupNodeId = `event_group_${ev.id}::`;
       const groupWidth = 300;
       const groupHeight = 200;
-      nodes.push({
-        id: groupNodeId,
-        type: "custom",
-        position: { x: baseX, y: baseY },
-        data: {
-          label: `イベント: ${ev.title || ev.id}`,
-          node: null,
-          color: "#6b7280",
-          isEventGroup: true,
-          eventId: ev.id,
-          logicId: "",
-        } as unknown as Record<string, unknown>,
-        width: groupWidth,
-        height: groupHeight,
-      });
-      baseY += 250;
-      if (baseY > 800) {
-        baseY = 0;
-        baseX += 400;
-      }
+      placeEventGroup(groupNodeId, groupWidth, groupHeight, ev.id, "", []);
     });
 
-    // イベントに紐づいていないノード：ロジックごと階層整列
+    const nonEventOffsetY = maxEventBottom > 0 ? maxEventBottom + eventGap : 0;
+
+    // イベントに紐づいていないノード：ロジックごと階層整列。イベント領域と重ならないよう Y オフセット。
     const nonEvent = graphNodes.filter((n) => !processedNodeIds.has(n.node_id));
     nonEvent.forEach((node) => {
       const logicId = nodeToLogic.get(node.node_id);
@@ -533,7 +520,7 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
       nodes.push({
         id: node.node_id,
         type: "custom",
-        position: { x: p.x, y: p.y },
+        position: { x: p.x, y: p.y + nonEventOffsetY },
         data: {
           label: getNodeLabel(node),
           node: node,
@@ -981,14 +968,9 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
     return () => { cancelled = true; };
   }, [editEventId]);
 
-  const toggleEventLoc = useCallback((id: string) => {
+  const setEventLocation = useCallback((locId: string | null) => {
     setEventForm((f) =>
-      !f ? null : {
-        ...f,
-        location_ids: f.location_ids.includes(id)
-          ? f.location_ids.filter((x) => x !== id)
-          : [...f.location_ids, id],
-      }
+      !f ? null : { ...f, location_ids: locId ? [locId] : [] }
     );
   }, []);
 
@@ -2009,14 +1991,24 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
                 </div>
               </div>
               <div className="form-group">
-                <label>場所（複数可）</label>
-                <div className="checkbox-group">
+                <label>場所（1つのみ）</label>
+                <div className="checkbox-group" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+                  <label className="checkbox-label">
+                    <input
+                      type="radio"
+                      name="graph-event-location"
+                      checked={(eventForm.location_ids ?? []).length === 0}
+                      onChange={() => setEventLocation(null)}
+                    />
+                    未設定
+                  </label>
                   {locations.map((loc) => (
                     <label key={loc.id} className="checkbox-label">
                       <input
-                        type="checkbox"
-                        checked={eventForm.location_ids.includes(loc.id)}
-                        onChange={() => toggleEventLoc(loc.id)}
+                        type="radio"
+                        name="graph-event-location"
+                        checked={(eventForm.location_ids ?? [])[0] === loc.id}
+                        onChange={() => setEventLocation(loc.id)}
                       />
                       {loc.name}
                     </label>

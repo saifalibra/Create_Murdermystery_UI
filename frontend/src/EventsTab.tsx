@@ -335,12 +335,10 @@ export default function EventsTab() {
     }
   };
 
-  const toggleLoc = (id: string) => {
+  const setEventLocation = (locId: string | null) => {
     setForm((f) => ({
       ...f,
-      location_ids: f.location_ids.includes(id)
-        ? f.location_ids.filter((x) => x !== id)
-        : [...f.location_ids, id],
+      location_ids: locId ? [locId] : [],
     }));
   };
 
@@ -391,9 +389,9 @@ export default function EventsTab() {
                   <td>{(e.time_range?.start ?? "").slice(0, 16)}</td>
                   <td>{(e.time_range?.end ?? "").slice(0, 16)}</td>
                   <td>
-                    {(e.location_ids ?? [])
-                      .map((lid) => locations.find((l) => l.id === lid)?.name || lid)
-                      .join(", ") || "—"}
+                    {(e.location_ids ?? [])[0]
+                      ? locations.find((l) => l.id === (e.location_ids ?? [])[0])?.name ?? (e.location_ids ?? [])[0]
+                      : "—"}
                   </td>
                   <td>
                     {(e.participants ?? [])
@@ -471,14 +469,24 @@ export default function EventsTab() {
                 </div>
               </div>
               <div className="form-group">
-                <label>場所（複数可）</label>
-                <div className="checkbox-group">
+                <label>場所（1つのみ）</label>
+                <div className="checkbox-group" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+                  <label className="checkbox-label">
+                    <input
+                      type="radio"
+                      name="event-location"
+                      checked={(form.location_ids ?? []).length === 0}
+                      onChange={() => setEventLocation(null)}
+                    />
+                    未設定
+                  </label>
                   {locations.map((loc) => (
                     <label key={loc.id} className="checkbox-label">
                       <input
-                        type="checkbox"
-                        checked={form.location_ids.includes(loc.id)}
-                        onChange={() => toggleLoc(loc.id)}
+                        type="radio"
+                        name="event-location"
+                        checked={(form.location_ids ?? [])[0] === loc.id}
+                        onChange={() => setEventLocation(loc.id)}
                       />
                       {loc.name}
                     </label>

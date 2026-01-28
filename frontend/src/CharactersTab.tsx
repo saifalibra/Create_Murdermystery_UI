@@ -107,34 +107,13 @@ export default function CharactersTab() {
         role: form.role,
         bio: form.bio || null,
         relations: form.relations,
-        secret_ids: form.secret_ids,
+        secret_ids: existing?.secret_ids ?? form.secret_ids,
       };
       await fetch(`/api/characters/${editId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const prevIds = new Set((existing?.secret_ids ?? []) as string[]);
-      const nextIds = new Set(form.secret_ids);
-      for (const s of secrets) {
-        const had = prevIds.has(s.id);
-        const has = nextIds.has(s.id);
-        const hid = new Set(s.hidden_from_character_ids ?? []);
-        if (has && !hid.has(editId)) continue;
-        if (has) {
-          hid.delete(editId);
-        } else if (had) {
-          hid.add(editId);
-        } else continue;
-        await fetch(`/api/secrets/${s.id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...s,
-            hidden_from_character_ids: [...hid],
-          }),
-        });
-      }
       await fetchList();
     } catch (e) {
       alert(e instanceof Error ? e.message : "保存に失敗しました");
@@ -176,15 +155,6 @@ export default function CharactersTab() {
     setForm((f) => ({
       ...f,
       relations: f.relations.filter((_, i) => i !== index),
-    }));
-  };
-
-  const toggleSecret = (secretId: string) => {
-    setForm((f) => ({
-      ...f,
-      secret_ids: f.secret_ids.includes(secretId)
-        ? f.secret_ids.filter((id) => id !== secretId)
-        : [...f.secret_ids, secretId],
     }));
   };
 
@@ -384,26 +354,32 @@ export default function CharactersTab() {
                 )}
               </div>
               <div className="form-group">
-                <label>秘密（複数選択可・秘密タブの「隠したい人物」と連動）</label>
-                <div className="checkbox-group">
-                  {secrets.map((s) => {
-                    const label = s.title || s.description || "(無題)";
-                    return (
-                      <label key={s.id} className="checkbox-label">
-                        <input
-                          type="checkbox"
-                          checked={form.secret_ids.includes(s.id)}
-                          onChange={() => toggleSecret(s.id)}
-                        />
-                        {label.slice(0, 40)}
-                        {label.length > 40 ? "…" : ""}
-                      </label>
-                    );
-                  })}
-                  {secrets.length === 0 && (
-                    <div style={{ color: "#8b949e", fontSize: "0.9rem" }}>
-                      秘密タブで秘密を追加すると選択できます
-                    </div>
+                <label>秘密（秘密タブの「隠したい人物」で自動設定・読取専用）</label>
+                <div style={{ fontSize: "0.9rem", color: "#8b949e", marginBottom: "0.35rem" }}>
+                  秘密タブで設定します。
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+                  {(form.secret_ids ?? [])
+                    .map((sid) => secrets.find((s) => s.id === sid))
+                    .filter(Boolean)
+                    .map((s) => (
+                      <span
+                        key={s!.id}
+                        style={{
+                          display: "inline-block",
+                          padding: "0.2rem 0.5rem",
+                          borderRadius: 6,
+                          background: "#21262d",
+                          border: "1px solid #30363d",
+                          fontSize: "0.9rem",
+                        }}
+                      >
+                        {(s!.title || s!.description || "(無題)").slice(0, 40)}
+                        {(s!.title || s!.description || "").length > 40 ? "…" : ""}
+                      </span>
+                    ))}
+                  {(form.secret_ids ?? []).length === 0 && (
+                    <span style={{ color: "#8b949e", fontSize: "0.9rem" }}>—</span>
                   )}
                 </div>
               </div>
