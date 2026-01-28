@@ -23,6 +23,7 @@ export interface GraphNodeData {
   color?: string;
   isEventGroup?: boolean;
   eventId?: string; // イベントグループ親ノードの場合のみ
+  logicId?: string; // イベントグループ親ノードの場合のみ（(event_id, logic_id) の logic_id）
   parentId?: string; // イベントグループ子ノードの場合のみ
   logicName?: string;
 }

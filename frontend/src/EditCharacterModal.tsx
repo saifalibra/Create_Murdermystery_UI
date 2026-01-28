@@ -256,7 +256,7 @@ export default function EditCharacterModal({
           </div>
           {logicIds.length > 0 && (
             <div className="form-group">
-              <label>ロジックごとの詳細・関連事象</label>
+              <label>ロジックごとの詳細・内包事象</label>
               {logicIds.map((logicId) => (
                 <div
                   key={logicId}
@@ -297,7 +297,7 @@ export default function EditCharacterModal({
                   {(relatedByLogic.get(logicId) ?? []).length > 0 && (
                     <div style={{ marginTop: "0.75rem" }}>
                       <label style={{ fontSize: "0.85rem", color: "#8b949e", display: "block", marginBottom: "0.35rem" }}>
-                        関連事象
+                        内包事象
                       </label>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
                         {(relatedByLogic.get(logicId) ?? []).map((n) => (
