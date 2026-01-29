@@ -38,7 +38,7 @@ function App() {
     }
   });
 
-  /** 空イベントインスタンス（オーファン・別ロジック追加。タブ切替・リロードで保持するため App で管理、sessionStorage に永続化） */
+  /** 空イベントインスタンス（オーファン・別ロジック追加）。タブ切替・リロードで保持するため sessionStorage に永続化。 */
   const [emptyEventInstances, setEmptyEventInstances] = useState<EmptyEventInstance[]>(() => {
     try {
       const s = sessionStorage.getItem("mm-empty-event-instances");

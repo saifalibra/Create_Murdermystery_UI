@@ -2,6 +2,7 @@ export interface Logic {
   logic_id: string;
   name: string;
   color?: string | null;
+  init_node_id?: string | null;
 }
 
 /** ノードタイプ */
@@ -26,6 +27,8 @@ export interface GraphNodeData {
   logicId?: string; // イベントグループ親ノードの場合のみ（(event_id, logic_id) の logic_id）
   parentId?: string; // イベントグループ子ノードの場合のみ
   logicName?: string;
+  /** 整列の先頭（init）なら true。ハンドルに init 表示用 */
+  isInit?: boolean;
 }
 
 export interface GraphEdge {

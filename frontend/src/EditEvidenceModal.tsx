@@ -95,8 +95,17 @@ export default function EditEvidenceModal({
       const lid = nodeToLogic.get(n.node_id);
       if (lid) s.add(lid);
     });
-    return Array.from(s);
-  }, [sameRefNodes, nodeToLogic]);
+    sameRefNodes.forEach((n) => {
+      graphEdges.forEach((e) => {
+        const otherId = e.source_node_id === n.node_id ? e.target_node_id : e.target_node_id === n.node_id ? e.source_node_id : null;
+        if (otherId != null && otherId.startsWith("event_group_")) {
+          const logicId = otherId.slice("event_group_".length).split("::")[1];
+          if (logicId) s.add(logicId);
+        }
+      });
+    });
+    return Array.from(s).filter((id) => id !== "" && id !== "_orphan_");
+  }, [sameRefNodes, nodeToLogic, graphEdges]);
 
   const relatedByLogic = useMemo(() => {
     const m = new Map<string, GraphNode[]>();
@@ -109,11 +118,48 @@ export default function EditEvidenceModal({
           if (e.target_node_id === n.node_id) relatedIds.add(e.source_node_id);
         });
       });
+      graphEdges.forEach((e) => {
+        const src = e.source_node_id;
+        const tgt = e.target_node_id;
+        const srcIsEventGroup = src.startsWith("event_group_");
+        const tgtIsEventGroup = tgt.startsWith("event_group_");
+        if (srcIsEventGroup && !tgtIsEventGroup) {
+          const eventId = src.slice("event_group_".length).split("::")[0];
+          if (sameRefNodes.some((n) => n.event_id === eventId)) relatedIds.add(tgt);
+          else graphNodes.filter((nn) => nn.event_id === eventId).forEach((nn) => relatedIds.add(nn.node_id));
+        }
+        if (!srcIsEventGroup && tgtIsEventGroup) {
+          const eventId = tgt.slice("event_group_".length).split("::")[0];
+          if (sameRefNodes.some((n) => n.event_id === eventId)) relatedIds.add(src);
+          else graphNodes.filter((nn) => nn.event_id === eventId).forEach((nn) => relatedIds.add(nn.node_id));
+        }
+      });
       const related = graphNodes.filter((n) => relatedIds.has(n.node_id));
       m.set(logicId, related);
     });
     return m;
   }, [logicIds, sameRefNodes, nodeToLogic, graphEdges, graphNodes]);
+
+  const relatedEventIdsByLogic = useMemo(() => {
+    const m = new Map<string, string[]>();
+    logicIds.forEach((logicId) => {
+      const eventIds = new Set<string>();
+      sameRefNodes.forEach((n) => {
+        graphEdges.forEach((e) => {
+          const otherId = e.source_node_id === n.node_id ? e.target_node_id : e.target_node_id === n.node_id ? e.source_node_id : null;
+          if (otherId != null && otherId.startsWith("event_group_")) {
+            const key = otherId.slice("event_group_".length);
+            const parts = key.split("::");
+            const eventId = parts[0];
+            const logicFromKey = parts[1];
+            if (logicFromKey === logicId && eventId) eventIds.add(eventId);
+          }
+        });
+      });
+      m.set(logicId, Array.from(eventIds));
+    });
+    return m;
+  }, [logicIds, sameRefNodes, graphEdges]);
 
   useEffect(() => {
     if (logicDetailsInited.current || loading || !sameRefNodes.length) return;
@@ -336,80 +382,124 @@ export default function EditEvidenceModal({
           </div>
           {logicIds.length > 0 && (
             <div className="form-group">
-              <label>ロジックごとの詳細・内包事象</label>
-              {logicIds.map((logicId) => (
-                <div
-                  key={logicId}
-                  style={{
-                    marginBottom: "1.25rem",
-                    padding: "1rem",
-                    border: "1px solid #30363d",
-                    borderRadius: 8,
-                    background: "#0d1117",
-                  }}
-                >
-                  <span
+              <label>ロジックごとの詳細・関連事象</label>
+              {logicIds.map((logicId) => {
+                const related = relatedByLogic.get(logicId) ?? [];
+                const eventIdsFromEdges = relatedEventIdsByLogic.get(logicId) ?? [];
+                const eventIds = new Set<string>(eventIdsFromEdges);
+                const eventTags: { eventId: string; title: string }[] = [];
+                const nodeTags: GraphNode[] = [];
+                eventIdsFromEdges.forEach((eid) => {
+                  eventTags.push({
+                    eventId: eid,
+                    title: events.find((e) => e.id === eid)?.title ?? eid,
+                  });
+                });
+                related.forEach((n) => {
+                  if (n.event_id) {
+                    if (!eventIds.has(n.event_id)) {
+                      eventIds.add(n.event_id);
+                      eventTags.push({
+                        eventId: n.event_id,
+                        title: events.find((e) => e.id === n.event_id)?.title ?? n.event_id,
+                      });
+                    }
+                  } else {
+                    nodeTags.push(n);
+                  }
+                });
+                return (
+                  <div
+                    key={logicId}
                     style={{
-                      display: "inline-block",
-                      padding: "0.2rem 0.5rem",
-                      borderRadius: 6,
-                      background: getLogicColor(logicId, logics),
-                      color: "#fff",
-                      fontSize: "0.85rem",
-                      marginBottom: "0.5rem",
+                      marginBottom: "1.25rem",
+                      padding: "1rem",
+                      border: "1px solid #30363d",
+                      borderRadius: 8,
+                      background: "#0d1117",
                     }}
                   >
-                    {getLogicName(logicId, logics)}
-                  </span>
-                  <div style={{ marginTop: "0.5rem" }}>
-                    <label style={{ fontSize: "0.85rem", color: "#8b949e" }}>詳細</label>
-                    <textarea
-                      className="form-control"
-                      placeholder="このロジックでの説明を入力..."
-                      value={logicDetails[logicId] ?? ""}
-                      onChange={(e) =>
-                        setLogicDetails((prev) => ({ ...prev, [logicId]: e.target.value }))
-                      }
-                      rows={2}
-                      style={{ marginTop: "0.25rem" }}
-                    />
-                  </div>
-                  {(relatedByLogic.get(logicId) ?? []).length > 0 && (
-                    <div style={{ marginTop: "0.75rem" }}>
-                      <label style={{ fontSize: "0.85rem", color: "#8b949e", display: "block", marginBottom: "0.35rem" }}>
-                        内包事象
-                      </label>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-                        {(relatedByLogic.get(logicId) ?? []).map((n) => (
-                          <span
-                            key={n.node_id}
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: "0.35rem",
-                              padding: "0.25rem 0.5rem",
-                              background: "#21262d",
-                              borderRadius: 6,
-                              fontSize: "0.9rem",
-                            }}
-                          >
-                            {getNodeLabel(n)}
-                            <button
-                              type="button"
-                              className="modal-close"
-                              style={{ padding: "0.1rem", fontSize: "1rem", lineHeight: 1 }}
-                              onClick={() => removeEdgeToNode(n.node_id)}
-                              title="接続を解除"
-                            >
-                              ×
-                            </button>
-                          </span>
-                        ))}
-                      </div>
+                    <span
+                      style={{
+                        display: "inline-block",
+                        padding: "0.2rem 0.5rem",
+                        borderRadius: 6,
+                        background: getLogicColor(logicId, logics),
+                        color: "#fff",
+                        fontSize: "0.85rem",
+                        marginBottom: "0.5rem",
+                      }}
+                    >
+                      {getLogicName(logicId, logics)}
+                    </span>
+                    <div style={{ marginTop: "0.5rem" }}>
+                      <label style={{ fontSize: "0.85rem", color: "#8b949e" }}>詳細</label>
+                      <textarea
+                        className="form-control"
+                        placeholder="このロジックでの説明を入力..."
+                        value={logicDetails[logicId] ?? ""}
+                        onChange={(e) =>
+                          setLogicDetails((prev) => ({ ...prev, [logicId]: e.target.value }))
+                        }
+                        rows={2}
+                        style={{ marginTop: "0.25rem" }}
+                      />
                     </div>
-                  )}
-                </div>
-              ))}
+                    {(eventTags.length > 0 || nodeTags.length > 0) && (
+                      <div style={{ marginTop: "0.75rem" }}>
+                        <label style={{ fontSize: "0.85rem", color: "#8b949e", display: "block", marginBottom: "0.35rem" }}>
+                          関連事象
+                        </label>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                          {eventTags.map((t) => (
+                            <span
+                              key={t.eventId}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                padding: "0.25rem 0.5rem",
+                                background: "#21262d",
+                                borderRadius: 6,
+                                fontSize: "0.9rem",
+                                border: "1px solid #30363d",
+                              }}
+                            >
+                              {t.title}
+                            </span>
+                          ))}
+                          {nodeTags.map((n) => (
+                            <span
+                              key={n.node_id}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "0.35rem",
+                                padding: "0.25rem 0.5rem",
+                                background: "#161b22",
+                                borderRadius: 6,
+                                fontSize: "0.9rem",
+                                border: "1px solid #388bfd",
+                                color: "#8b949e",
+                              }}
+                            >
+                              {getNodeLabel(n)}
+                              <button
+                                type="button"
+                                className="modal-close"
+                                style={{ padding: "0.1rem", fontSize: "1rem", lineHeight: 1 }}
+                                onClick={() => removeEdgeToNode(n.node_id)}
+                                title="接続を解除"
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

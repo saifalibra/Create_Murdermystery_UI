@@ -81,6 +81,9 @@ function CustomNode({ data }: NodeProps) {
         }}
       >
         <Handle type="target" position={Position.Top} style={{ width: 16, height: 16, backgroundColor: "#fff" }} />
+        {d.isInit && (
+          <span style={{ position: "absolute", left: "50%", transform: "translate(-50%, -100%)", top: 4, fontSize: "0.65rem", color: "#58a6ff", whiteSpace: "nowrap" }}>init</span>
+        )}
         <div style={{ 
           fontWeight: 600, 
           fontSize: "1.1rem",
@@ -90,18 +93,17 @@ function CustomNode({ data }: NodeProps) {
         }}>
           {d.label}
         </div>
-        {/* 子ノードはReact Flowによってこのdivの下に配置される */}
         <Handle type="source" position={Position.Bottom} style={{ width: 16, height: 16, backgroundColor: "#fff" }} />
       </div>
     );
   }
 
-  // イベントグループ内の子ノードはハンドルなし（接続はイベントノード経由）
   const isChild = !!d.parentId;
 
   return (
     <div
       style={{
+        position: "relative",
         backgroundColor: d.color || "#6b7280",
         color: "#fff",
         border: "2px solid #fff",
@@ -111,7 +113,14 @@ function CustomNode({ data }: NodeProps) {
         minHeight: 40,
       }}
     >
-      {!isChild && <Handle type="target" position={Position.Top} style={{ width: 16, height: 16, backgroundColor: "#fff" }} />}
+      {!isChild && (
+        <>
+          <Handle type="target" position={Position.Top} style={{ width: 16, height: 16, backgroundColor: "#fff" }} />
+          {d.isInit && (
+            <span style={{ position: "absolute", left: "50%", transform: "translate(-50%, -100%)", top: 2, fontSize: "0.65rem", color: "#58a6ff", whiteSpace: "nowrap" }}>init</span>
+          )}
+        </>
+      )}
       <div>{d.label}</div>
       {!isChild && <Handle type="source" position={Position.Bottom} style={{ width: 16, height: 16, backgroundColor: "#fff" }} />}
     </div>
@@ -153,14 +162,19 @@ const hashColor = (str: string): string => {
   return `hsl(${hue}, 70%, 50%)`;
 };
 
-// ロジック名を取得
+// 内部用: 未割り当てロジックのプレースホルダー（実在するロジックではない。表示時は「ロジック未割り当て」に置換）
+const ORPHAN_LOGIC_ID = "_orphan_";
+
+// ロジック名を取得（"" と _orphan_ は表示しない）
 const getLogicName = (logicId: string, logics: Logic[]): string => {
+  if (logicId === "" || logicId === ORPHAN_LOGIC_ID) return "";
   const logic = logics.find((l) => l.logic_id === logicId);
   return logic?.name || logicId;
 };
 
-// ロジックの色を取得
+// ロジックの色を取得（未割り当てはグレー）
 const getLogicColor = (logicId: string, logics: Logic[]): string => {
+  if (logicId === "" || logicId === ORPHAN_LOGIC_ID) return "#6b7280";
   const logic = logics.find((l) => l.logic_id === logicId);
   if (logic?.color) {
     return logic.color;
@@ -362,102 +376,102 @@ const GraphTab: React.FC<GraphTabProps> = ({
     return m;
   }, [eventGroups, emptyEventInstances]);
 
-  /** ロジックごとの階層レイアウト
-   * 大前提: ノードは重ならない。同じ階層は同じ y（横の位置を揃える）で、x は隙間を空けて割り当て。
-   */
-  const logicLayout = useMemo(() => {
-    const layout = new Map<string, { x: number; y: number }>();
-    const logicIds = new Set<string>();
+  /** エッジでつながるイベント＋通常ノードを連結成分ごとに縦1列。先頭は自動選択（流入0 or 適当）。 */
+  type LayoutUnit = { type: "event_group"; key: string } | { type: "node"; node_id: string };
+  const layoutByComponent = useMemo((): LayoutUnit[][] => {
+    const nodeToEg = new Map<string, string>();
     graphNodes.forEach((n) => {
-      const lid = nodeToLogic.get(n.node_id);
-      if (lid) logicIds.add(lid);
+      if (n.event_id) {
+        const lid = nodeToLogic.get(n.node_id) ?? "";
+        nodeToEg.set(n.node_id, `event_group_${n.event_id}::${lid}`);
+      }
     });
 
-    const W = 180;
-    const H = 90;
-    const GAP = 40;
-    let logicBaseX = 0;
+    const vertices = new Set<string>();
+    mergedEventGroups.forEach((_, key) => vertices.add(`event_group_${key}`));
+    graphNodes.filter((n) => !n.event_id).forEach((n) => vertices.add(n.node_id));
+    if (vertices.size === 0) return [];
 
-    logicIds.forEach((logicId) => {
-      const logicNodeIds = graphNodes
-        .filter((n) => nodeToLogic.get(n.node_id) === logicId)
-        .map((n) => n.node_id);
-      const logicEdges = graphEdges.filter(
-        (e) =>
-          logicNodeIds.includes(e.source_node_id) &&
-          logicNodeIds.includes(e.target_node_id)
-      );
+    const adjU = new Map<string, string[]>();
+    const adjD = new Map<string, string[]>();
+    vertices.forEach((v) => {
+      adjU.set(v, []);
+      adjD.set(v, []);
+    });
+    graphEdges.forEach((e) => {
+      const a = nodeToEg.get(e.source_node_id) ?? e.source_node_id;
+      const b = nodeToEg.get(e.target_node_id) ?? e.target_node_id;
+      if (!vertices.has(a) || !vertices.has(b) || a === b) return;
+      adjU.get(a)!.push(b);
+      adjU.get(b)!.push(a);
+      adjD.get(a)!.push(b);
+    });
 
-      const outDeg = new Map<string, number>();
-      const ins = new Map<string, Set<string>>();
-      logicNodeIds.forEach((id) => {
-        outDeg.set(id, 0);
-        ins.set(id, new Set());
-      });
-      logicEdges.forEach((e) => {
-        outDeg.set(e.source_node_id, (outDeg.get(e.source_node_id) ?? 0) + 1);
-        ins.get(e.target_node_id)!.add(e.source_node_id);
-      });
-
-      const levels = new Map<string, number>();
-      const queue: string[] = logicNodeIds.filter((id) => ins.get(id)!.size === 0);
-      queue.forEach((id) => levels.set(id, 0));
-      let head = 0;
-      while (head < queue.length) {
-        const u = queue[head++];
-        const lu = levels.get(u)!;
-        logicEdges
-          .filter((e) => e.source_node_id === u)
-          .forEach((e) => {
-            const v = e.target_node_id;
-            if (!levels.has(v)) {
-              levels.set(v, lu + 1);
-              queue.push(v);
-            }
-          });
-      }
-      logicNodeIds.forEach((id) => {
-        if (!levels.has(id)) levels.set(id, 0);
-      });
-
-      const byLevel = new Map<number, string[]>();
-      logicNodeIds.forEach((id) => {
-        const L = levels.get(id)!;
-        if (!byLevel.has(L)) byLevel.set(L, []);
-        byLevel.get(L)!.push(id);
-      });
-
-      const branching = new Set(logicNodeIds.filter((id) => (outDeg.get(id) ?? 0) > 1));
-      const maxLevel = Math.max(...Array.from(byLevel.keys()), 0);
-
-      const pos = new Map<string, { x: number; y: number }>();
-      let maxCol = 0;
-
-      for (let L = 0; L <= maxLevel; L++) {
-        const ids = byLevel.get(L) ?? [];
-        const branch = ids.filter((id) => branching.has(id));
-        const rest = ids.filter((id) => !branching.has(id));
-        const ordered = [...branch, ...rest];
-
-        ordered.forEach((id, col) => {
-          pos.set(id, { x: logicBaseX + col * (W + GAP), y: L * (H + GAP) });
+    const components: string[][] = [];
+    const vis = new Set<string>();
+    for (const v of vertices) {
+      if (vis.has(v)) continue;
+      const comp: string[] = [];
+      const q = [v];
+      vis.add(v);
+      let h = 0;
+      while (h < q.length) {
+        const u = q[h++];
+        comp.push(u);
+        (adjU.get(u) ?? []).forEach((w) => {
+          if (!vis.has(w)) {
+            vis.add(w);
+            q.push(w);
+          }
         });
-        maxCol = Math.max(maxCol, ordered.length);
       }
+      components.push(comp);
+    }
 
-      pos.forEach((p, id) => layout.set(id, p));
-      logicBaseX += Math.max(maxCol, 1) * (W + GAP) + GAP;
+    const result: LayoutUnit[][] = [];
+    components.forEach((comp) => {
+      const vset = new Set(comp);
+      const inDegLocal = new Map<string, number>();
+      comp.forEach((id) => inDegLocal.set(id, 0));
+      graphEdges.forEach((e) => {
+        const a = nodeToEg.get(e.source_node_id) ?? e.source_node_id;
+        const b = nodeToEg.get(e.target_node_id) ?? e.target_node_id;
+        if (vset.has(a) && vset.has(b) && a !== b) inDegLocal.set(b, (inDegLocal.get(b) ?? 0) + 1);
+      });
+      const roots = comp.filter((id) => (inDegLocal.get(id) ?? 0) === 0);
+      const root = roots[0] ?? comp[0];
+      const order: string[] = [];
+      const q = [root];
+      const seen = new Set<string>([root]);
+      let head = 0;
+      while (head < q.length) {
+        const u = q[head++];
+        order.push(u);
+        (adjD.get(u) ?? []).forEach((w) => {
+          if (vset.has(w) && !seen.has(w)) {
+            seen.add(w);
+            q.push(w);
+          }
+        });
+      }
+      comp.forEach((id) => {
+        if (!seen.has(id)) order.push(id);
+      });
+      result.push(
+        order.map((id) =>
+          id.startsWith("event_group_")
+            ? { type: "event_group" as const, key: id.slice("event_group_".length) }
+            : { type: "node" as const, node_id: id }
+        )
+      );
     });
-
-    return layout;
-  }, [graphNodes, graphEdges, nodeToLogic]);
+    return result;
+  }, [graphNodes, graphEdges, nodeToLogic, mergedEventGroups]);
 
   // React Flow用のノードに変換
   const toRFNodes = useMemo((): Node[] => {
     const nodes: Node[] = [];
     const processedNodeIds = new Set<string>();
-    let baseX = 0;
-    let baseY = 0;
 
     const nodeWidth = 150;
     const nodeHeight = 80;
@@ -465,29 +479,23 @@ const GraphTab: React.FC<GraphTabProps> = ({
     const headerHeight = 60;
     const nodeGap = 10;
     const eventGap = 24;
-    const eventRowMaxY = 800;
 
-    let maxEventBottom = 0;
-    let maxRowWidth = 0;
-
-    const placeEventGroup = (
+    const placeEventGroupAt = (
+      x: number,
+      y: number,
       groupNodeId: string,
       groupWidth: number,
       groupHeight: number,
       eventId: string,
       logicId: string,
       groupNodes: GraphNode[],
-      instanceId?: string
+      instanceId?: string,
+      isInit?: boolean
     ) => {
-      if (baseY + groupHeight > eventRowMaxY && maxRowWidth > 0) {
-        baseY = 0;
-        baseX += maxRowWidth + eventGap;
-        maxRowWidth = 0;
-      }
       nodes.push({
         id: groupNodeId,
         type: "custom",
-        position: { x: baseX, y: baseY },
+        position: { x, y },
         data: {
           label: `イベント: ${events.find((e) => e.id === eventId)?.title || eventId}`,
           node: null,
@@ -496,6 +504,7 @@ const GraphTab: React.FC<GraphTabProps> = ({
           eventId,
           logicId,
           instanceId: instanceId ?? undefined,
+          isInit: !!isInit,
         } as unknown as Record<string, unknown>,
         width: groupWidth,
         height: groupHeight,
@@ -525,66 +534,59 @@ const GraphTab: React.FC<GraphTabProps> = ({
           draggable: false,
         });
       });
-      maxEventBottom = Math.max(maxEventBottom, baseY + groupHeight);
-      maxRowWidth = Math.max(maxRowWidth, groupWidth);
-      baseY += groupHeight + eventGap;
     };
 
-    // イベントグループを処理。キー "eventId::logicId" または "eventId::logicId::instanceId"。重ならないよう配置。
-    mergedEventGroups.forEach((groupNodes, key) => {
-      const parts = key.split("::");
-      const eventId = parts[0];
-      const logicId = parts[1] ?? "";
-      const instanceId = parts.length >= 3 ? parts.slice(2).join("::") : undefined;
-      const groupNodeId = `event_group_${key}`;
-      const cols = Math.min(3, groupNodes.length);
-      const rows = Math.ceil(groupNodes.length / 3);
-      const groupWidth = Math.max(300, padding * 2 + cols * nodeWidth + (cols - 1) * nodeGap);
-      const groupHeight = Math.max(200, headerHeight + padding + rows * nodeHeight + (rows - 1) * nodeGap);
-      placeEventGroup(groupNodeId, groupWidth, groupHeight, eventId, logicId, groupNodes, instanceId);
-    });
+    const normalNodeHeight = 60;
+    let logicBaseX = 0;
 
-    // 空イベントグループ（events に存在するが内包ノードが0件のイベント）
-    const eventIdsWithGroup = new Set<string>();
-    mergedEventGroups.forEach((_, key) => {
-      const [eid] = key.split("::");
-      eventIdsWithGroup.add(eid);
-    });
-    const removedSet = new Set(removedEventIdsFromGraph);
-    events.forEach((ev) => {
-      if (eventIdsWithGroup.has(ev.id)) return;
-      if (removedSet.has(ev.id)) return;
-      const groupNodeId = `event_group_${ev.id}::`;
-      const groupWidth = 300;
-      const groupHeight = 200;
-      placeEventGroup(groupNodeId, groupWidth, groupHeight, ev.id, "", []);
-    });
-
-    const nonEventOffsetY = maxEventBottom > 0 ? maxEventBottom + eventGap : 0;
-
-    // イベントに紐づいていないノード：ロジックごと階層整列。イベント領域と重ならないよう Y オフセット。
-    const nonEvent = graphNodes.filter((n) => !processedNodeIds.has(n.node_id));
-    nonEvent.forEach((node) => {
-      const logicId = nodeToLogic.get(node.node_id);
-      const logicName = logicId ? getLogicName(logicId, logics) : "";
-      const fillColor = NODE_TYPE_COLORS[node.node_type] ?? DEFAULT_NODE_COLOR;
-      const p = logicLayout.get(node.node_id) ?? { x: 0, y: 0 };
-
-      nodes.push({
-        id: node.node_id,
-        type: "custom",
-        position: { x: p.x, y: p.y + nonEventOffsetY },
-        data: {
-          label: getNodeLabel(node),
-          node: node,
-          color: fillColor,
-          logicName,
-        } as unknown as Record<string, unknown>,
-      });
-    });
+    for (const units of layoutByComponent) {
+      let columnY = 0;
+      let columnWidth = 0;
+      for (let i = 0; i < units.length; i++) {
+        const u = units[i];
+        const isInit = i === 0;
+        if (u.type === "event_group") {
+          const key = u.key;
+          const groupNodes = mergedEventGroups.get(key) ?? [];
+          const parts = key.split("::");
+          const eventId = parts[0];
+          const lid = parts[1] ?? "";
+          const instanceId = parts.length >= 3 ? parts.slice(2).join("::") : undefined;
+          const groupNodeId = `event_group_${key}`;
+          const cols = Math.min(3, groupNodes.length);
+          const rows = Math.ceil(groupNodes.length / 3);
+          const groupWidth = Math.max(300, padding * 2 + cols * nodeWidth + (cols - 1) * nodeGap);
+          const groupHeight = Math.max(200, headerHeight + padding + rows * nodeHeight + (rows - 1) * nodeGap);
+          placeEventGroupAt(logicBaseX, columnY, groupNodeId, groupWidth, groupHeight, eventId, lid, groupNodes, instanceId, isInit);
+          columnY += groupHeight + eventGap;
+          columnWidth = Math.max(columnWidth, groupWidth);
+        } else {
+          const node = graphNodes.find((n) => n.node_id === u.node_id);
+          if (!node) continue;
+          const lid = nodeToLogic.get(node.node_id);
+          const logicName = lid ? getLogicName(lid, logics) : "";
+          const fillColor = isInit && lid ? getLogicColor(lid, logics) : (NODE_TYPE_COLORS[node.node_type] ?? DEFAULT_NODE_COLOR);
+          nodes.push({
+            id: node.node_id,
+            type: "custom",
+            position: { x: logicBaseX, y: columnY },
+            data: {
+              label: getNodeLabel(node),
+              node: node,
+              color: fillColor,
+              logicName,
+              isInit,
+            } as unknown as Record<string, unknown>,
+          });
+          columnY += normalNodeHeight + eventGap;
+          columnWidth = Math.max(columnWidth, 150);
+        }
+      }
+      logicBaseX += (columnWidth || 300) + eventGap;
+    }
 
     return nodes;
-  }, [graphNodes, nodeToLogic, logics, mergedEventGroups, events, removedEventIdsFromGraph, getNodeLabel, logicLayout]);
+  }, [graphNodes, nodeToLogic, logics, mergedEventGroups, events, getNodeLabel, layoutByComponent]);
 
   // node_id -> event_group_${eventId}::${logicId} のマッピング（イベント内の子ノード用）
   const nodeIdToEventGroupId = useMemo(() => {
@@ -683,39 +685,31 @@ const GraphTab: React.FC<GraphTabProps> = ({
       const currentMap = new Map(currentNodes.map((n) => [n.id, n]));
       const newNodes = toRFNodes;
       const result: Node[] = [];
-      
-      // 既存ノードの位置を保持
+      const d = (n: Node) => n.data as { isEventGroup?: boolean; parentId?: string };
+
       for (const newNode of newNodes) {
         const existingNode = currentMap.get(newNode.id);
-        
-        if (existingNode) {
-          // 既存ノードの位置を保持
-          // ただし、イベントグループの変更（parentIdの変更）があった場合は新しい位置を使用
-          const eventGroupChanged = 
+        const isEventGroupNode = !!newNode.parentId || !!d(newNode).isEventGroup;
+
+        if (existingNode && isEventGroupNode) {
+          const eventGroupChanged =
             (existingNode.parentId !== newNode.parentId) ||
-            (existingNode.parentId === null && newNode.parentId !== null) ||
-            (existingNode.parentId !== null && newNode.parentId === null);
-          
+            (existingNode.parentId == null && newNode.parentId != null) ||
+            (existingNode.parentId != null && newNode.parentId == null);
           if (eventGroupChanged) {
-            // イベントグループの変更があった場合は新しい位置を使用
             result.push(newNode);
           } else {
-            // 既存ノードの位置を保持
-            result.push({
-              ...newNode,
-              position: existingNode.position,
-            });
+            result.push({ ...newNode, position: existingNode.position });
           }
         } else {
-          // 新規ノードは新しい位置を使用
           result.push(newNode);
         }
       }
-      
+
       prevToRFNodesRef.current = newNodes;
       return result;
     });
-  }, [graphNodes, graphEdges, nodeToLogic, logics, mergedEventGroups, events, getNodeLabel, logicLayout, setNodes, layoutRevision, toRFNodes]);
+  }, [graphNodes, graphEdges, nodeToLogic, logics, mergedEventGroups, events, getNodeLabel, layoutByComponent, setNodes, layoutRevision, toRFNodes]);
 
   useEffect(() => {
     const prev = prevGraphNodesLength.current;
@@ -925,6 +919,29 @@ const GraphTab: React.FC<GraphTabProps> = ({
       }
     } catch (err) {
       console.error(`Failed to update logic color ${logicId}:`, err);
+    }
+  };
+
+  const updateLogicInit = async (logicId: string, initNodeId: string | null) => {
+    const logic = logics.find((l) => l.logic_id === logicId);
+    if (!logic) return;
+
+    try {
+      const res = await fetch(`/api/graph/logics/${logicId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...logic,
+          init_node_id: initNodeId,
+        }),
+      });
+      if (res.ok) {
+        const updatedLogic = await res.json();
+        onLogicsChange(logics.map((l) => (l.logic_id === logicId ? updatedLogic : l)));
+        setLayoutRevision((r) => r + 1);
+      }
+    } catch (err) {
+      console.error(`Failed to update logic init ${logicId}:`, err);
     }
   };
 
@@ -1168,44 +1185,54 @@ const GraphTab: React.FC<GraphTabProps> = ({
     return m;
   }, [editEventId, graphNodes, nodeToLogic, containedByLogic]);
 
-  /** 当該 (eventId, logicId) にグラフ上のイベント枠（グループ）があるか */
-  const hasGroupForLogic = useCallback(
-    (eventId: string, logicId: string) => {
-      return Array.from(mergedEventGroups.keys()).some((k) => {
-        const parts = k.split("::");
-        return parts[0] === eventId && parts[1] === logicId;
-      });
+  /** event_group_* ID からロジックIDを取得（バックエンドの node_to_logic に含まれないため） */
+  const getLogicFromNodeId = useCallback(
+    (nodeId: string): string | undefined => {
+      if (nodeId.startsWith("event_group_")) {
+        const key = nodeId.slice("event_group_".length);
+        const part = key.split("::")[1];
+        return part ?? undefined;
+      }
+      return nodeToLogic.get(nodeId);
     },
-    [mergedEventGroups]
+    [nodeToLogic]
   );
 
-  /** 当該イベントに、指定ロジック色のエッジが繋がっているか（ロジックはエッジの色で管理） */
-  const eventHasEdgeInLogic = useCallback(
-    (eventId: string, logicId: string) => {
-      const eventNodeIds = new Set(
-        graphNodes.filter((n) => n.event_id === eventId).map((n) => n.node_id)
-      );
-      if (eventNodeIds.size === 0) return false;
-      const found = graphEdges.some((e) => {
-        const srcIn = eventNodeIds.has(e.source_node_id);
-        const tgtIn = eventNodeIds.has(e.target_node_id);
-        if (!srcIn && !tgtIn) return false;
-        const srcLogic = nodeToLogic.get(e.source_node_id);
-        const tgtLogic = nodeToLogic.get(e.target_node_id);
-        return srcLogic === logicId || tgtLogic === logicId;
-      });
-      // #region agent log
-      _log("eventHasEdgeInLogic", { eventId, logicId, eventNodeCount: eventNodeIds.size, found }, "H1");
-      // #endregion
-      return found;
-    },
-    [graphEdges, graphNodes, nodeToLogic]
-  );
+  /** ロジックごと：エッジでイベントに接続されているが event_id を持たないノード（関連事象に反映用）。キーはイベント側のロジック。 */
+  const connectedByEdgeByLogic = useMemo(() => {
+    const m = new Map<string, GraphNode[]>();
+    if (!editEventId) return m;
+    const eventNodeIds = new Set(
+      graphNodes.filter((n) => n.event_id === editEventId).map((n) => n.node_id)
+    );
+    const eventGroupIds = new Set<string>();
+    mergedEventGroups.forEach((_, key) => {
+      if (key.startsWith(editEventId + "::")) eventGroupIds.add("event_group_" + key);
+    });
+    const isEventEnd = (nodeId: string) =>
+      eventNodeIds.has(nodeId) || eventGroupIds.has(nodeId);
+    const skip = new Set(["", ORPHAN_LOGIC_ID]);
+    graphEdges.forEach((e) => {
+      const srcEvent = isEventEnd(e.source_node_id);
+      const tgtEvent = isEventEnd(e.target_node_id);
+      if (!srcEvent && !tgtEvent) return;
+      const otherId = srcEvent ? e.target_node_id : e.source_node_id;
+      const other = graphNodes.find((n) => n.node_id === otherId);
+      if (!other || other.event_id != null) return;
+      const eventEndId = srcEvent ? e.source_node_id : e.target_node_id;
+      const lid = getLogicFromNodeId(eventEndId);
+      if (!lid || skip.has(lid)) return;
+      if (!m.has(lid)) m.set(lid, []);
+      if (m.get(lid)!.some((n) => n.node_id === otherId)) return;
+      m.get(lid)!.push(other);
+    });
+    return m;
+  }, [editEventId, graphNodes, graphEdges, getLogicFromNodeId, mergedEventGroups]);
 
-  /** このイベントが含まれるロジック一覧（詳細・内包ブロック表示用。"" と _orphan_ 除く）。紐づけのみも含む。 */
+  /** このイベントが含まれるロジック一覧（詳細・関連事象ブロック表示用。"" と _orphan_ 除く）。紐づけのみ・エッジ接続（event_group_* 含む）も含む。 */
   const logicsForEvent = useMemo(() => {
     if (!editEventId) return [];
-    const skip = new Set(["", "_orphan_"]);
+    const skip = new Set(["", ORPHAN_LOGIC_ID]);
     const ids = new Set<string>();
     mergedEventGroups.forEach((_, key) => {
       const [eid, logicId] = key.split("::");
@@ -1217,8 +1244,30 @@ const GraphTab: React.FC<GraphTabProps> = ({
     eventLogicAssociations.forEach((p) => {
       if (p.eventId === editEventId && p.logicId != null && !skip.has(p.logicId)) ids.add(p.logicId);
     });
+    const eventNodeIds = new Set(
+      graphNodes.filter((n) => n.event_id === editEventId).map((n) => n.node_id)
+    );
+    const eventGroupIds = new Set<string>();
+    mergedEventGroups.forEach((_, key) => {
+      if (key.startsWith(editEventId + "::")) eventGroupIds.add("event_group_" + key);
+    });
+    const isEventEnd = (nodeId: string) =>
+      eventNodeIds.has(nodeId) || eventGroupIds.has(nodeId);
+    graphEdges.forEach((e) => {
+      const srcEvent = isEventEnd(e.source_node_id);
+      const tgtEvent = isEventEnd(e.target_node_id);
+      if (!srcEvent && !tgtEvent) return;
+      const srcLogic = getLogicFromNodeId(e.source_node_id);
+      const tgtLogic = getLogicFromNodeId(e.target_node_id);
+      if (srcEvent && !tgtEvent && tgtLogic != null && !skip.has(tgtLogic)) ids.add(tgtLogic);
+      if (tgtEvent && !srcEvent && srcLogic != null && !skip.has(srcLogic)) ids.add(srcLogic);
+      if (srcEvent && tgtEvent) {
+        if (srcLogic != null && !skip.has(srcLogic)) ids.add(srcLogic);
+        if (tgtLogic != null && !skip.has(tgtLogic)) ids.add(tgtLogic);
+      }
+    });
     return Array.from(ids);
-  }, [editEventId, mergedEventGroups, emptyEventInstances, eventLogicAssociations]);
+  }, [editEventId, mergedEventGroups, emptyEventInstances, eventLogicAssociations, graphNodes, graphEdges, getLogicFromNodeId]);
 
   const removeNodeFromEvent = useCallback(
     async (node: GraphNode) => {
@@ -1274,18 +1323,6 @@ const GraphTab: React.FC<GraphTabProps> = ({
         if (prev.some((p) => p.eventId === editEventId && p.logicId === logicId)) return prev;
         return [...prev, { eventId: editEventId, logicId }];
       });
-    },
-    [editEventId]
-  );
-
-  /** 指定ロジックに空イベント枠（グラフ上のノード）を追加する。 */
-  const addEmptyInstanceForLogic = useCallback(
-    (logicId: string) => {
-      if (!editEventId) return;
-      const instanceId = `inst_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-      setEmptyEventInstances((prev) => [...prev, { eventId: editEventId, logicId, instanceId }]);
-      setRemovedEventIdsFromGraph((prev) => prev.filter((id) => id !== editEventId));
-      setLayoutRevision((r) => r + 1);
     },
     [editEventId]
   );
@@ -1802,13 +1839,13 @@ const GraphTab: React.FC<GraphTabProps> = ({
                             const instanceId = `inst_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
                             setEmptyEventInstances((prev) => [
                               ...prev,
-                              { eventId: ev.id, logicId: "_orphan_", instanceId },
+                              { eventId: ev.id, logicId: ORPHAN_LOGIC_ID, instanceId },
                             ]);
                             setRemovedEventIdsFromGraph((prev) => prev.filter((id) => id !== ev.id));
                             setAddNodeModal({ open: false, type: null });
                             setConnectFromSource(null);
                             setEditEventId(ev.id);
-                            setEditEventLogicId("_orphan_");
+                            setEditEventLogicId(ORPHAN_LOGIC_ID);
                             setEditInstanceId(instanceId);
                             setLayoutRevision((r) => r + 1);
                           }}
@@ -1849,13 +1886,13 @@ const GraphTab: React.FC<GraphTabProps> = ({
                           const instanceId = `inst_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
                           setEmptyEventInstances((prev) => [
                             ...prev,
-                            { eventId: newId, logicId: "_orphan_", instanceId },
+                            { eventId: newId, logicId: ORPHAN_LOGIC_ID, instanceId },
                           ]);
                           setRemovedEventIdsFromGraph((prev) => prev.filter((id) => id !== newId));
                           setAddNodeModal({ open: false, type: null });
                           setConnectFromSource(null);
                           setEditEventId(newId);
-                          setEditEventLogicId("_orphan_");
+                          setEditEventLogicId(ORPHAN_LOGIC_ID);
                           setEditInstanceId(instanceId);
                           setLayoutRevision((r) => r + 1);
                         } catch (e) {
@@ -2143,6 +2180,31 @@ const GraphTab: React.FC<GraphTabProps> = ({
                     />
                   </div>
                   <div style={{ marginBottom: "1rem" }}>
+                    <label style={{ display: "block", marginBottom: "0.5rem" }}>init（整列のルート）:</label>
+                    {detail.logic?.init_node_id ? (
+                      (() => {
+                        const initNode = graphNodes.find((n) => n.node_id === detail.logic!.init_node_id!);
+                        return (
+                          <span style={{ fontSize: "0.9rem", color: "#8b949e" }}>
+                            init: {initNode ? getNodeLabel(initNode) : detail.logic!.init_node_id}
+                          </span>
+                        );
+                      })()
+                    ) : (
+                      <span style={{ fontSize: "0.9rem", color: "#8b949e" }}>未設定</span>
+                    )}
+                    {logicDetailsModal.nodeId && detail.nodes.some((n) => n.node_id === logicDetailsModal.nodeId) && (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ marginTop: "0.35rem", marginLeft: "0.5rem" }}
+                        onClick={() => updateLogicInit(detail.logicId, logicDetailsModal.nodeId!)}
+                      >
+                        このノードを init にする
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ marginBottom: "1rem" }}>
                     <label style={{ display: "block", marginBottom: "0.5rem" }}>詳細テキスト:</label>
                     <textarea
                       className="form-control"
@@ -2165,18 +2227,64 @@ const GraphTab: React.FC<GraphTabProps> = ({
                       </div>
                     )}
                   </div>
-                  {detail.relatedNodes.length > 0 && (
-                    <div>
-                      <label style={{ display: "block", marginBottom: "0.5rem" }}>内包事象:</label>
-                      <ul>
-                        {detail.relatedNodes.map((node) => (
-                          <li key={node.node_id}>
-                            {node.node_type}: {getNodeLabel(node)}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
+                  {detail.relatedNodes.length > 0 && (() => {
+                    const eventIds = new Set<string>();
+                    const eventTags: { eventId: string; title: string }[] = [];
+                    const nodeTags: GraphNode[] = [];
+                    detail.relatedNodes.forEach((node) => {
+                      if (node.event_id) {
+                        if (!eventIds.has(node.event_id)) {
+                          eventIds.add(node.event_id);
+                          eventTags.push({
+                            eventId: node.event_id,
+                            title: events.find((e) => e.id === node.event_id)?.title ?? node.event_id,
+                          });
+                        }
+                      } else {
+                        nodeTags.push(node);
+                      }
+                    });
+                    return (
+                      <div>
+                        <label style={{ display: "block", marginBottom: "0.5rem" }}>関連事象:</label>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                          {eventTags.map((t) => (
+                            <span
+                              key={t.eventId}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                padding: "0.25rem 0.5rem",
+                                background: "#21262d",
+                                borderRadius: 6,
+                                fontSize: "0.9rem",
+                                border: "1px solid #30363d",
+                              }}
+                            >
+                              {t.title}
+                            </span>
+                          ))}
+                          {nodeTags.map((node) => (
+                            <span
+                              key={node.node_id}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                padding: "0.25rem 0.5rem",
+                                background: "#161b22",
+                                borderRadius: 6,
+                                fontSize: "0.9rem",
+                                border: "1px solid #388bfd",
+                                color: "#8b949e",
+                              }}
+                            >
+                              {node.node_type}: {getNodeLabel(node)}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               ))}
             </div>
@@ -2432,7 +2540,7 @@ const GraphTab: React.FC<GraphTabProps> = ({
               <div className="form-group">
                 <label>ロジックを紐づけ</label>
                 <p style={{ fontSize: "0.85rem", color: "#8b949e", marginBottom: "0.5rem" }}>
-                  紐づけたロジックに詳細を書けます。グラフに枠は増えません。枠を増やすには各ロジックブロックの「イベント枠を追加」を使います。
+                  紐づけたロジックに詳細を書けます。エッジで接続されているロジックは自動で追加されます。
                 </p>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
                   {logics
@@ -2458,21 +2566,16 @@ const GraphTab: React.FC<GraphTabProps> = ({
                 </div>
               </div>
               <div className="form-group">
-                <label>ロジックごとの詳細・内包事象</label>
+                <label>ロジックごとの詳細・関連事象</label>
                 {logicsForEvent.length === 0 ? (
                   <p style={{ fontSize: "0.9rem", color: "#8b949e" }}>
-                    「ロジックを紐づけ」でロジックを追加すると、ここに詳細・内包事象を設定できます。
+                    「ロジックを紐づけ」でロジックを追加するか、エッジで通常ノードと接続すると、ここに詳細・関連事象を設定できます。
                   </p>
                 ) : (
                   logicsForEvent.map((logicId) => {
                     const contained = containedByLogic.get(logicId) ?? [];
+                    const connected = connectedByEdgeByLogic.get(logicId) ?? [];
                     const addable = addableToEventByLogic.get(logicId) ?? [];
-                    const hasGroup = editEventId ? hasGroupForLogic(editEventId, logicId) : false;
-                    const hasEdge = editEventId ? eventHasEdgeInLogic(editEventId, logicId) : false;
-                    const showAddFrame = !hasGroup && !hasEdge;
-                    // #region agent log
-                    _log("logicBlock", { editEventId, logicId, hasGroup, hasEdge, showAddFrame }, "H2");
-                    // #endregion
                     return (
                       <div
                         key={logicId}
@@ -2517,23 +2620,11 @@ const GraphTab: React.FC<GraphTabProps> = ({
                             style={{ marginTop: "0.25rem" }}
                           />
                         </div>
-                        {showAddFrame ? (
-                          <div style={{ marginTop: "0.75rem" }}>
-                            <button
-                              type="button"
-                              className="btn-secondary"
-                              style={{ fontSize: "0.9rem" }}
-                              onClick={() => addEmptyInstanceForLogic(logicId)}
-                            >
-                              イベント枠を追加（グラフに表示）
-                            </button>
-                          </div>
-                        ) : (
                         <div style={{ marginTop: "0.75rem" }}>
                           <label style={{ fontSize: "0.85rem", color: "#8b949e", display: "block", marginBottom: "0.35rem" }}>
-                            内包事象（このロジック内のノード）
+                            関連事象（内包・接続）
                           </label>
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.75rem" }}>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.5rem" }}>
                             {contained.map((n) => (
                               <span
                                 key={n.node_id}
@@ -2560,6 +2651,25 @@ const GraphTab: React.FC<GraphTabProps> = ({
                                 </button>
                               </span>
                             ))}
+                            {connected.map((n) => (
+                              <span
+                                key={n.node_id}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "0.35rem",
+                                  padding: "0.25rem 0.5rem",
+                                  background: "#161b22",
+                                  borderRadius: 6,
+                                  fontSize: "0.9rem",
+                                  border: "1px solid #388bfd",
+                                  color: "#8b949e",
+                                }}
+                                title="エッジで接続"
+                              >
+                                {getNodeLabel(n)}
+                              </span>
+                            ))}
                           </div>
                           {addable.length > 0 && (
                             <div>
@@ -2582,7 +2692,6 @@ const GraphTab: React.FC<GraphTabProps> = ({
                             </div>
                           )}
                         </div>
-                        )}
                       </div>
                     );
                   })

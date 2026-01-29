@@ -40,3 +40,4 @@ class Logic(BaseModel):
     logic_id: str
     name: str
     color: str | None = None  # カスタム色（オプション）
+    init_node_id: str | None = None  # 整列時のルート（各ロジック1つのみ）
