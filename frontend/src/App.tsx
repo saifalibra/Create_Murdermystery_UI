@@ -10,6 +10,8 @@ import SecretsTab from "./SecretsTab";
 import SettingsTab from "./SettingsTab";
 import type { Logic } from "./types";
 
+export type EmptyEventInstance = { eventId: string; logicId: string; instanceId: string };
+
 const TABS = [
   { id: "dashboard", label: "ダッシュボード" },
   { id: "graph", label: "グラフ" },
@@ -26,6 +28,51 @@ function App() {
   const [activeTab, setActiveTab] = useState<string>("dashboard");
   const [logics, setLogics] = useState<Logic[]>([]);
   const [backendStatus, setBackendStatus] = useState<"online" | "offline">("offline");
+  /** グラフから削除したイベントID（タブ切替・リロードで保持するため App で管理、sessionStorage に永続化） */
+  const [removedEventIdsFromGraph, setRemovedEventIdsFromGraph] = useState<string[]>(() => {
+    try {
+      const s = sessionStorage.getItem("mm-removed-event-ids");
+      return s ? JSON.parse(s) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  /** 空イベントインスタンス（オーファン・別ロジック追加。タブ切替・リロードで保持するため App で管理、sessionStorage に永続化） */
+  const [emptyEventInstances, setEmptyEventInstances] = useState<EmptyEventInstance[]>(() => {
+    try {
+      const s = sessionStorage.getItem("mm-empty-event-instances");
+      if (!s) return [];
+      const parsed = JSON.parse(s) as unknown;
+      return Array.isArray(parsed)
+        ? (parsed as EmptyEventInstance[]).filter(
+            (p): p is EmptyEventInstance =>
+              p != null &&
+              typeof p.eventId === "string" &&
+              typeof p.logicId === "string" &&
+              typeof p.instanceId === "string"
+          )
+        : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem("mm-removed-event-ids", JSON.stringify(removedEventIdsFromGraph));
+    } catch {
+      /* ignore */
+    }
+  }, [removedEventIdsFromGraph]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem("mm-empty-event-instances", JSON.stringify(emptyEventInstances));
+    } catch {
+      /* ignore */
+    }
+  }, [emptyEventInstances]);
 
   useEffect(() => {
     const checkBackend = async () => {
@@ -97,7 +144,14 @@ function App() {
           </div>
         )}
         {activeTab === "graph" && (
-          <GraphTab logics={logics} onLogicsChange={setLogics} />
+          <GraphTab
+            logics={logics}
+            onLogicsChange={setLogics}
+            removedEventIdsFromGraph={removedEventIdsFromGraph}
+            setRemovedEventIdsFromGraph={setRemovedEventIdsFromGraph}
+            emptyEventInstances={emptyEventInstances}
+            setEmptyEventInstances={setEmptyEventInstances}
+          />
         )}
         {activeTab === "characters" && <CharactersTab />}
         {activeTab === "locations" && <LocationsTab />}

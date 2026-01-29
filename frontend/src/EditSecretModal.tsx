@@ -13,7 +13,6 @@ interface EditSecretModalProps {
   onClose: () => void;
   onSaved: () => void;
   onDeletedFromGraph: () => void;
-  onDeleted: () => void;
   updateLogicDetail: (nodeId: string, logicId: string, detailText: string) => Promise<void>;
   getLogicColor: (logicId: string, logics: Logic[]) => string;
   getLogicName: (logicId: string, logics: Logic[]) => string;
@@ -33,7 +32,6 @@ export default function EditSecretModal({
   onClose,
   onSaved,
   onDeletedFromGraph,
-  onDeleted,
   updateLogicDetail,
   getLogicColor,
   getLogicName,
@@ -166,36 +164,14 @@ export default function EditSecretModal({
   const handleDeleteFromGraph = async () => {
     if (!confirm("グラフからこの秘密を削除しますか？")) return;
     try {
-      for (const n of sameRefNodes) {
-        const connected = graphEdges.filter(
-          (e) => e.source_node_id === n.node_id || e.target_node_id === n.node_id
-        );
-        for (const e of connected) {
-          await fetch(`/api/graph/edges/${e.edge_id}`, { method: "DELETE" });
-        }
-        await fetch(`/api/graph/nodes/${n.node_id}`, { method: "DELETE" });
+      const connected = graphEdges.filter(
+        (e) => e.source_node_id === node.node_id || e.target_node_id === node.node_id
+      );
+      for (const e of connected) {
+        await fetch(`/api/graph/edges/${e.edge_id}`, { method: "DELETE" });
       }
+      await fetch(`/api/graph/nodes/${node.node_id}`, { method: "DELETE" });
       onDeletedFromGraph();
-      onClose();
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "削除に失敗しました");
-    }
-  };
-
-  const handleDelete = async () => {
-    if (!confirm("この秘密を完全に削除しますか？")) return;
-    try {
-      for (const n of sameRefNodes) {
-        const connected = graphEdges.filter(
-          (e) => e.source_node_id === n.node_id || e.target_node_id === n.node_id
-        );
-        for (const e of connected) {
-          await fetch(`/api/graph/edges/${e.edge_id}`, { method: "DELETE" });
-        }
-        await fetch(`/api/graph/nodes/${n.node_id}`, { method: "DELETE" });
-      }
-      await fetch(`/api/secrets/${refId}`, { method: "DELETE" });
-      onDeleted();
       onClose();
     } catch (e) {
       alert(e instanceof Error ? e.message : "削除に失敗しました");
@@ -245,7 +221,6 @@ export default function EditSecretModal({
             <div className="modal-footer" style={{ marginTop: "1rem", justifyContent: "space-between", flexWrap: "wrap" }}>
               <div style={{ display: "flex", gap: "0.5rem" }}>
                 <button type="button" className="btn-danger" onClick={handleDeleteFromGraph}>グラフから削除</button>
-                <button type="button" className="btn-danger" onClick={handleDelete}>削除</button>
               </div>
               <button type="button" className="btn-secondary" onClick={onClose}>キャンセル</button>
             </div>
@@ -390,9 +365,6 @@ export default function EditSecretModal({
           <div style={{ display: "flex", gap: "0.5rem" }}>
             <button type="button" className="btn-danger" onClick={handleDeleteFromGraph}>
               グラフから削除
-            </button>
-            <button type="button" className="btn-danger" onClick={handleDelete}>
-              削除
             </button>
           </div>
           <button type="button" className="btn-secondary" onClick={onClose}>

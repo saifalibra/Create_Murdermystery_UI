@@ -16,6 +16,7 @@ from app.api import (
     validation,
     import_api,
     background,
+    export_import,
 )
 
 
@@ -43,6 +44,7 @@ def create_app() -> FastAPI:
     app.include_router(validation.router, prefix="/api/validation", tags=["validation"])
     app.include_router(import_api.router, prefix="/api/import", tags=["import"])
     app.include_router(background.router, prefix="/api/background", tags=["background"])
+    app.include_router(export_import.router, prefix="/api", tags=["export_import"])
 
     @app.get("/")
     def root():

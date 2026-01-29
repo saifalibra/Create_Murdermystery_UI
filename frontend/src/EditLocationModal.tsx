@@ -157,15 +157,13 @@ export default function EditLocationModal({
   const handleDeleteFromGraph = async () => {
     if (!confirm("グラフからこの場所を削除しますか？")) return;
     try {
-      for (const n of sameRefNodes) {
-        const connected = graphEdges.filter(
-          (e) => e.source_node_id === n.node_id || e.target_node_id === n.node_id
-        );
-        for (const e of connected) {
-          await fetch(`/api/graph/edges/${e.edge_id}`, { method: "DELETE" });
-        }
-        await fetch(`/api/graph/nodes/${n.node_id}`, { method: "DELETE" });
+      const connected = graphEdges.filter(
+        (e) => e.source_node_id === node.node_id || e.target_node_id === node.node_id
+      );
+      for (const e of connected) {
+        await fetch(`/api/graph/edges/${e.edge_id}`, { method: "DELETE" });
       }
+      await fetch(`/api/graph/nodes/${node.node_id}`, { method: "DELETE" });
       onDeletedFromGraph();
       onClose();
     } catch (e) {

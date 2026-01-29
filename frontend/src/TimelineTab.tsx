@@ -33,6 +33,15 @@ for (let h = 0; h < 24; h++) {
   }
 }
 
+function toLocalDatetimeLocalString(d: Date): string {
+  const y = d.getFullYear();
+  const M = String(d.getMonth() + 1).padStart(2, "0");
+  const D = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  return `${y}-${M}-${D}T${h}:${m}`;
+}
+
 function TimelineEventEditModal({
   event,
   locations,
@@ -48,8 +57,12 @@ function TimelineEventEditModal({
 }) {
   const [title, setTitle] = useState(event.title);
   const [content, setContent] = useState(event.content ?? "");
-  const [start, setStart] = useState((event.time_range?.start ?? "").slice(0, 16));
-  const [end, setEnd] = useState((event.time_range?.end ?? "").slice(0, 16));
+  const [start, setStart] = useState(
+    event.time_range?.start ? toLocalDatetimeLocalString(new Date(event.time_range.start)) : ""
+  );
+  const [end, setEnd] = useState(
+    event.time_range?.end ? toLocalDatetimeLocalString(new Date(event.time_range.end)) : ""
+  );
   const [locationIds, setLocationIds] = useState<string[]>(event.location_ids ?? []);
   const [participants, setParticipants] = useState<string[]>(event.participants ?? []);
 
@@ -231,11 +244,13 @@ export default function TimelineTab() {
     const cells: GridCell[] = [];
     const start = new Date(event.time_range.start);
     const end = new Date(event.time_range.end);
+    const y = start.getFullYear();
+    const mo = start.getMonth();
+    const d = start.getDate();
     event.location_ids.forEach((locId) => {
       TIME_SLOTS.forEach((slot) => {
         const [h, m] = slot.split(":").map(Number);
-        const slotTime = new Date(start);
-        slotTime.setHours(h, m, 0, 0);
+        const slotTime = new Date(y, mo, d, h, m, 0, 0);
         if (slotTime >= start && slotTime < end) {
           cells.push({ locationId: locId, timeSlot: slot });
         }
@@ -244,7 +259,8 @@ export default function TimelineTab() {
     return cells;
   };
 
-  const handleMouseDown = (locationId: string, timeSlot: string) => {
+  const handleMouseDown = (e: React.MouseEvent, locationId: string, timeSlot: string) => {
+    e.preventDefault();
     setIsDragging(true);
     setDragStart({ locationId, timeSlot });
     setSelectedCells(new Set([getCellKey(locationId, timeSlot)]));
@@ -254,38 +270,27 @@ export default function TimelineTab() {
     (e: MouseEvent) => {
       if (!isDragging || !dragStart || !gridRef.current) return;
       const rect = gridRef.current.getBoundingClientRect();
-      const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       const scrollTop = gridRef.current.scrollTop || 0;
 
-      const cellWidth = rect.width / (locations.length + 1);
       const cellHeight = 40;
       const headerHeight = 40;
 
-      const locationIndex = Math.floor(x / cellWidth) - 1;
-      const timeIndex = Math.floor((y + scrollTop - headerHeight) / cellHeight);
+      let timeIndex = Math.floor((y + scrollTop - headerHeight) / cellHeight);
+      timeIndex = Math.max(0, Math.min(TIME_SLOTS.length - 1, timeIndex));
 
-      if (locationIndex >= 0 && locationIndex < locations.length && timeIndex >= 0 && timeIndex < TIME_SLOTS.length) {
-        const startLocIdx = locations.findIndex((l) => l.id === dragStart.locationId);
-        const startTimeIdx = TIME_SLOTS.indexOf(dragStart.timeSlot);
-        const endLocIdx = locationIndex;
-        const endTimeIdx = timeIndex;
+      const startTimeIdx = TIME_SLOTS.indexOf(dragStart.timeSlot);
+      const minTimeIdx = Math.min(startTimeIdx, timeIndex);
+      const maxTimeIdx = Math.max(startTimeIdx, timeIndex);
 
-        const minLocIdx = Math.min(startLocIdx, endLocIdx);
-        const maxLocIdx = Math.max(startLocIdx, endLocIdx);
-        const minTimeIdx = Math.min(startTimeIdx, endTimeIdx);
-        const maxTimeIdx = Math.max(startTimeIdx, endTimeIdx);
-
-        const newSelected = new Set<string>();
-        for (let locIdx = minLocIdx; locIdx <= maxLocIdx; locIdx++) {
-          for (let timeIdx = minTimeIdx; timeIdx <= maxTimeIdx; timeIdx++) {
-            newSelected.add(getCellKey(locations[locIdx].id, TIME_SLOTS[timeIdx]));
-          }
-        }
-        setSelectedCells(newSelected);
+      const newSelected = new Set<string>();
+      const locId = dragStart.locationId;
+      for (let t = minTimeIdx; t <= maxTimeIdx; t++) {
+        newSelected.add(getCellKey(locId, TIME_SLOTS[t]));
       }
+      setSelectedCells(newSelected);
     },
-    [isDragging, dragStart, locations]
+    [isDragging, dragStart]
   );
 
   const handleMouseUp = useCallback(() => {
@@ -369,13 +374,14 @@ export default function TimelineTab() {
     const ranges = new Map<string, { startSlot: string; endSlot: string }>();
     const start = new Date(event.time_range.start);
     const end = new Date(event.time_range.end);
-    
+    const y = start.getFullYear();
+    const mo = start.getMonth();
+    const d = start.getDate();
     event.location_ids.forEach((locId) => {
       const slots: string[] = [];
       TIME_SLOTS.forEach((slot) => {
         const [h, m] = slot.split(":").map(Number);
-        const slotTime = new Date(start);
-        slotTime.setHours(h, m, 0, 0);
+        const slotTime = new Date(y, mo, d, h, m, 0, 0);
         if (slotTime >= start && slotTime < end) {
           slots.push(slot);
         }
@@ -469,6 +475,7 @@ export default function TimelineTab() {
             border: "1px solid #30363d",
             borderRadius: 8,
             background: "#0d1117",
+            userSelect: isDragging ? "none" : undefined,
           }}
         >
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "800px" }}>
@@ -516,6 +523,8 @@ export default function TimelineTab() {
                       fontFamily: "ui-monospace, monospace",
                       fontSize: "0.9rem",
                       color: "#58a6ff",
+                      height: "40px",
+                      boxSizing: "border-box",
                     }}
                   >
                     {timeSlot}
@@ -528,21 +537,9 @@ export default function TimelineTab() {
                     // このセルが開始セルであるイベントのみ表示（rowspanで結合）
                     const startEvents = cellEvents.filter((ev) => isEventStartCell(ev, loc.id, timeSlot));
                     
-                    // rowspanで覆われているセルは空にする（rowspanで結合されているため）
-                    if (isCovered) {
-                      return (
-                        <td
-                          key={loc.id}
-                          style={{
-                            padding: 0,
-                            border: "1px solid #30363d",
-                            background: isSelected ? "#1f6feb40" : "#0d1117",
-                            height: "40px",
-                          }}
-                        />
-                      );
-                    }
-                    
+                    // rowspanで覆われている列は td を出さない（rowspan が占有するため。出すと列ずれで「隣の枠が選択されたように見える」）
+                    if (isCovered) return null;
+
                     return (
                       <td
                         key={loc.id}
@@ -555,7 +552,7 @@ export default function TimelineTab() {
                           position: "relative",
                           verticalAlign: "top",
                         }}
-                        onMouseDown={() => handleMouseDown(loc.id, timeSlot)}
+                        onMouseDown={(e) => handleMouseDown(e, loc.id, timeSlot)}
                         rowSpan={startEvents.length > 0 ? getEventRowspan(startEvents[0], loc.id) : undefined}
                       >
                         {startEvents.map((ev) => {

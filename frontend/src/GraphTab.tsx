@@ -16,6 +16,23 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { Logic, GraphNode, GraphEdge, NodeType, GraphNodeData } from "./types";
+
+// #region agent log
+const _log = (message: string, data: Record<string, unknown>, hypothesisId?: string) => {
+  fetch("http://127.0.0.1:7242/ingest/bf14b69e-b890-4a74-8aa0-f7b18a675877", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      location: "GraphTab.tsx",
+      message,
+      data,
+      timestamp: Date.now(),
+      sessionId: "debug-session",
+      hypothesisId: hypothesisId ?? undefined,
+    }),
+  }).catch(() => {});
+};
+// #endregion
 import EditEvidenceModal from "./EditEvidenceModal";
 import EditSecretModal from "./EditSecretModal";
 import EditLocationModal from "./EditLocationModal";
@@ -118,6 +135,12 @@ const DEFAULT_NODE_COLOR = "#6b7280";
 interface GraphTabProps {
   logics: Logic[];
   onLogicsChange: (logics: Logic[]) => void;
+  removedEventIdsFromGraph: string[];
+  setRemovedEventIdsFromGraph: React.Dispatch<React.SetStateAction<string[]>>;
+  emptyEventInstances: Array<{ eventId: string; logicId: string; instanceId: string }>;
+  setEmptyEventInstances: React.Dispatch<
+    React.SetStateAction<Array<{ eventId: string; logicId: string; instanceId: string }>>
+  >;
 }
 
 // ハッシュベースの色生成
@@ -145,7 +168,14 @@ const getLogicColor = (logicId: string, logics: Logic[]): string => {
   return hashColor(logicId);
 };
 
-const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
+const GraphTab: React.FC<GraphTabProps> = ({
+  logics,
+  onLogicsChange,
+  removedEventIdsFromGraph,
+  setRemovedEventIdsFromGraph,
+  emptyEventInstances,
+  setEmptyEventInstances,
+}) => {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [graphNodes, setGraphNodes] = useState<GraphNode[]>([]);
@@ -154,12 +184,18 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
     nodeId: string | null;
     isOpen: boolean;
   }>({ nodeId: null, isOpen: false });
+  const [edgeContextMenu, setEdgeContextMenu] = useState<{
+    x: number;
+    y: number;
+    edgeId: string;
+  } | null>(null);
   const [logicManagementModal, setLogicManagementModal] = useState(false);
   /** タイプ別編集モーダル用（クリックで開く） */
   const [editModalNode, setEditModalNode] = useState<GraphNode | null>(null);
   /** イベントノードクリック時の編集モーダル用 */
   const [editEventId, setEditEventId] = useState<string | null>(null);
   const [editEventLogicId, setEditEventLogicId] = useState<string | null>(null);
+  const [editInstanceId, setEditInstanceId] = useState<string | null>(null);
   const [eventForm, setEventForm] = useState<EventForm | null>(null);
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [characters, setCharacters] = useState<{ id: string; name: string }[]>([]);
@@ -175,13 +211,16 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
   const [connectFromSource, setConnectFromSource] = useState<string | null>(null);
 
   const [nodeToLogicMap, setNodeToLogicMap] = useState<Map<string, string>>(new Map());
-  /** 他ロジックに追加した空 (event, logic) インスタンス */
-  const [emptyEventInstances, setEmptyEventInstances] = useState<Array<{ eventId: string; logicId: string }>>([]);
+  /** ロジック紐づけのみ（グラフに枠は作らない）。+ ロジックで追加。 */
+  const [eventLogicAssociations, setEventLogicAssociations] = useState<
+    Array<{ eventId: string; logicId: string }>
+  >([]);
   const [layoutRevision, setLayoutRevision] = useState(0);
   const hasInitialLayout = useRef(false);
   const prevLayoutRevisionRef = useRef(0);
   const prevGraphNodesLength = useRef(0);
   const prevEventGroups = useRef<Map<string, GraphNode[]>>(new Map());
+  const edgesRef = useRef<Edge[]>([]);
 
   // 連結成分を計算
   const computeLogics = useCallback(async () => {
@@ -313,12 +352,12 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
     return groups;
   }, [graphNodes, nodeToLogic]);
 
-  // eventGroups + 空 (event, logic) インスタンスをマージ
+  // eventGroups + 空 (event, logic, instance) インスタンスをマージ。同一 (event, logic) で複数可
   const mergedEventGroups = useMemo(() => {
     const m = new Map<string, GraphNode[]>(eventGroups);
-    emptyEventInstances.forEach(({ eventId, logicId }) => {
-      const key = `${eventId}::${logicId}`;
-      if (!m.has(key)) m.set(key, []);
+    emptyEventInstances.forEach(({ eventId, logicId, instanceId }) => {
+      const key = `${eventId}::${logicId}::${instanceId}`;
+      m.set(key, []);
     });
     return m;
   }, [eventGroups, emptyEventInstances]);
@@ -431,7 +470,15 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
     let maxEventBottom = 0;
     let maxRowWidth = 0;
 
-    const placeEventGroup = (groupNodeId: string, groupWidth: number, groupHeight: number, eventId: string, logicId: string, groupNodes: GraphNode[]) => {
+    const placeEventGroup = (
+      groupNodeId: string,
+      groupWidth: number,
+      groupHeight: number,
+      eventId: string,
+      logicId: string,
+      groupNodes: GraphNode[],
+      instanceId?: string
+    ) => {
       if (baseY + groupHeight > eventRowMaxY && maxRowWidth > 0) {
         baseY = 0;
         baseX += maxRowWidth + eventGap;
@@ -448,6 +495,7 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
           isEventGroup: true,
           eventId,
           logicId,
+          instanceId: instanceId ?? undefined,
         } as unknown as Record<string, unknown>,
         width: groupWidth,
         height: groupHeight,
@@ -482,15 +530,18 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
       baseY += groupHeight + eventGap;
     };
 
-    // イベントグループを処理。キー "eventId::logicId"（空グループ含む）。重ならないよう groupWidth/groupHeight で配置。
+    // イベントグループを処理。キー "eventId::logicId" または "eventId::logicId::instanceId"。重ならないよう配置。
     mergedEventGroups.forEach((groupNodes, key) => {
-      const [eventId, logicId] = key.split("::");
-      const groupNodeId = `event_group_${eventId}::${logicId}`;
+      const parts = key.split("::");
+      const eventId = parts[0];
+      const logicId = parts[1] ?? "";
+      const instanceId = parts.length >= 3 ? parts.slice(2).join("::") : undefined;
+      const groupNodeId = `event_group_${key}`;
       const cols = Math.min(3, groupNodes.length);
       const rows = Math.ceil(groupNodes.length / 3);
       const groupWidth = Math.max(300, padding * 2 + cols * nodeWidth + (cols - 1) * nodeGap);
       const groupHeight = Math.max(200, headerHeight + padding + rows * nodeHeight + (rows - 1) * nodeGap);
-      placeEventGroup(groupNodeId, groupWidth, groupHeight, eventId, logicId, groupNodes);
+      placeEventGroup(groupNodeId, groupWidth, groupHeight, eventId, logicId, groupNodes, instanceId);
     });
 
     // 空イベントグループ（events に存在するが内包ノードが0件のイベント）
@@ -499,8 +550,10 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
       const [eid] = key.split("::");
       eventIdsWithGroup.add(eid);
     });
+    const removedSet = new Set(removedEventIdsFromGraph);
     events.forEach((ev) => {
       if (eventIdsWithGroup.has(ev.id)) return;
+      if (removedSet.has(ev.id)) return;
       const groupNodeId = `event_group_${ev.id}::`;
       const groupWidth = 300;
       const groupHeight = 200;
@@ -531,7 +584,7 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
     });
 
     return nodes;
-  }, [graphNodes, nodeToLogic, logics, mergedEventGroups, events, getNodeLabel, logicLayout]);
+  }, [graphNodes, nodeToLogic, logics, mergedEventGroups, events, removedEventIdsFromGraph, getNodeLabel, logicLayout]);
 
   // node_id -> event_group_${eventId}::${logicId} のマッピング（イベント内の子ノード用）
   const nodeIdToEventGroupId = useMemo(() => {
@@ -570,6 +623,9 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
         source,
         target,
         type: "default",
+        selectable: true,
+        deletable: true,
+        interactionWidth: 24,
         markerEnd: {
           type: MarkerType.ArrowClosed,
         },
@@ -583,8 +639,21 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
   }, [graphEdges, nodeToLogic, logics, nodeIdToEventGroupId]);
 
   useEffect(() => {
-    setEdges(toRFEdges);
+    // #region agent log
+    _log("setEdgesFromToRF", { edgeCount: toRFEdges.length }, "H3");
+    // #endregion
+    setEdges((prev) => {
+      const next = toRFEdges;
+      return next.map((e) => {
+        const p = prev.find((x) => x.id === e.id);
+        return { ...e, selected: p?.selected ?? false };
+      });
+    });
   }, [toRFEdges, setEdges]);
+
+  useEffect(() => {
+    edgesRef.current = edges;
+  }, [edges]);
 
   useEffect(() => {
     if (graphNodes.length > 0 && !hasInitialLayout.current) {
@@ -595,7 +664,6 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
 
   useEffect(() => {
     if (layoutRevision <= 0) return;
-    // 整列ボタン押下時のみ適用: layoutRevision が増えたときだけ再配置する
     if (layoutRevision === prevLayoutRevisionRef.current) return;
     prevLayoutRevisionRef.current = layoutRevision;
     setNodes(toRFNodes);
@@ -607,9 +675,10 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
   useEffect(() => {
     if (layoutRevision <= 0) {
       prevToRFNodesRef.current = toRFNodes;
+      setNodes(toRFNodes);
       return;
     }
-    
+
     setNodes((currentNodes) => {
       const currentMap = new Map(currentNodes.map((n) => [n.id, n]));
       const newNodes = toRFNodes;
@@ -732,6 +801,7 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
       if (nodeData.isEventGroup && nodeData.eventId) {
         setEditEventId(nodeData.eventId);
         setEditEventLogicId(nodeData.logicId ?? null);
+        setEditInstanceId((nodeData as { instanceId?: string }).instanceId ?? null);
         return;
       }
 
@@ -912,6 +982,54 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
     await computeLogics();
   }, [fetchGraphData, computeLogics]);
 
+  const onEdgesDelete = useCallback(
+    async (edgesToRemove: Edge[]) => {
+      // #region agent log
+      _log("onEdgesDelete", { count: edgesToRemove.length, ids: edgesToRemove.map((e) => e.id) }, "H4");
+      // #endregion
+      try {
+        for (const e of edgesToRemove) {
+          const res = await fetch(`/api/graph/edges/${e.id}`, { method: "DELETE" });
+          if (!res.ok) throw new Error(`エッジ削除失敗: ${e.id}`);
+        }
+        await refreshGraph();
+      } catch (err) {
+        alert(err instanceof Error ? err.message : "エッジの削除に失敗しました");
+      }
+    },
+    [refreshGraph]
+  );
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      const tag = (document.activeElement as HTMLElement)?.tagName?.toLowerCase();
+      const skipForm = tag === "input" || tag === "textarea" || tag === "select";
+      const all = edgesRef.current;
+      const sel = all.filter((x) => x.selected);
+      _log("keydown Del/Bsp", {
+        key: e.key,
+        activeTag: tag,
+        skipForm,
+        totalEdges: all.length,
+        selectedCount: sel.length,
+        selectedIds: sel.map((x) => x.id),
+      }, "H4");
+      if (skipForm) return;
+      if (sel.length === 0) return;
+      e.preventDefault();
+      (async () => {
+        for (const edge of sel) {
+          const res = await fetch(`/api/graph/edges/${edge.id}`, { method: "DELETE" });
+          if (!res.ok) throw new Error(`エッジ削除失敗: ${edge.id}`);
+        }
+        await refreshGraph();
+      })().catch((err) => alert(err instanceof Error ? err.message : "エッジの削除に失敗しました"));
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, [refreshGraph]);
+
   const refreshEvents = useCallback(async () => {
     try {
       const res = await fetch("/api/events");
@@ -930,6 +1048,7 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
     if (!editEventId) {
       setEventForm(null);
       setEditEventLogicId(null);
+      setEditInstanceId(null);
       rawEventRef.current = null;
       return;
     }
@@ -955,12 +1074,14 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
           setEventForm(null);
           setEditEventId(null);
           setEditEventLogicId(null);
+          setEditInstanceId(null);
         }
       } catch (e) {
         console.error("Failed to load event:", e);
         if (!cancelled) {
           setEditEventId(null);
           setEditEventLogicId(null);
+          setEditInstanceId(null);
         }
       }
     };
@@ -1000,6 +1121,7 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
         await refreshGraph();
         setEditEventId(null);
         setEditEventLogicId(null);
+        setEditInstanceId(null);
         setEventForm(null);
       } else {
         alert("保存に失敗しました");
@@ -1009,24 +1131,6 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
     }
   }, [eventForm, editEventId, refreshEvents, refreshGraph]);
 
-  const removeEvent = useCallback(async () => {
-    if (!editEventId || !confirm("このイベントを削除しますか？")) return;
-    try {
-      const res = await fetch(`/api/events/${editEventId}`, { method: "DELETE" });
-      if (res.ok) {
-        await refreshEvents();
-        await refreshGraph();
-        setEditEventId(null);
-        setEditEventLogicId(null);
-        setEventForm(null);
-      } else {
-        alert("削除に失敗しました");
-      }
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "削除に失敗しました");
-    }
-  }, [editEventId, refreshEvents, refreshGraph]);
-
   // 当該 (editEventId, editEventLogicId) に内包されているノード
   const containedNodes = useMemo(() => {
     if (!editEventId || editEventLogicId == null) return [];
@@ -1035,15 +1139,86 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
     );
   }, [graphNodes, editEventId, editEventLogicId, nodeToLogic]);
 
-  // 同じロジックで内包に追加できるノード（event_id 未設定 or 他イベント）
-  const addableToEventNodes = useMemo(() => {
-    if (!editEventId || editEventLogicId == null) return [];
-    const contained = new Set(containedNodes.map((n) => n.node_id));
-    return graphNodes.filter((n) => {
-      if (contained.has(n.node_id)) return false;
-      return nodeToLogic.get(n.node_id) === editEventLogicId;
+  // ロジックごとの内包ノード・追加可能ノード（イベント編集モーダル常時表示用）
+  const containedByLogic = useMemo(() => {
+    const m = new Map<string, GraphNode[]>();
+    if (!editEventId) return m;
+    graphNodes.forEach((n) => {
+      if (n.event_id !== editEventId) return;
+      const lid = nodeToLogic.get(n.node_id);
+      if (!lid) return;
+      if (!m.has(lid)) m.set(lid, []);
+      m.get(lid)!.push(n);
     });
-  }, [graphNodes, editEventId, editEventLogicId, nodeToLogic, containedNodes]);
+    return m;
+  }, [editEventId, graphNodes, nodeToLogic]);
+
+  const addableToEventByLogic = useMemo(() => {
+    const m = new Map<string, GraphNode[]>();
+    if (!editEventId) return m;
+    const contained = new Set<string>();
+    containedByLogic.forEach((nodes) => nodes.forEach((n) => contained.add(n.node_id)));
+    graphNodes.forEach((n) => {
+      if (contained.has(n.node_id)) return;
+      const lid = nodeToLogic.get(n.node_id);
+      if (!lid) return;
+      if (!m.has(lid)) m.set(lid, []);
+      m.get(lid)!.push(n);
+    });
+    return m;
+  }, [editEventId, graphNodes, nodeToLogic, containedByLogic]);
+
+  /** 当該 (eventId, logicId) にグラフ上のイベント枠（グループ）があるか */
+  const hasGroupForLogic = useCallback(
+    (eventId: string, logicId: string) => {
+      return Array.from(mergedEventGroups.keys()).some((k) => {
+        const parts = k.split("::");
+        return parts[0] === eventId && parts[1] === logicId;
+      });
+    },
+    [mergedEventGroups]
+  );
+
+  /** 当該イベントに、指定ロジック色のエッジが繋がっているか（ロジックはエッジの色で管理） */
+  const eventHasEdgeInLogic = useCallback(
+    (eventId: string, logicId: string) => {
+      const eventNodeIds = new Set(
+        graphNodes.filter((n) => n.event_id === eventId).map((n) => n.node_id)
+      );
+      if (eventNodeIds.size === 0) return false;
+      const found = graphEdges.some((e) => {
+        const srcIn = eventNodeIds.has(e.source_node_id);
+        const tgtIn = eventNodeIds.has(e.target_node_id);
+        if (!srcIn && !tgtIn) return false;
+        const srcLogic = nodeToLogic.get(e.source_node_id);
+        const tgtLogic = nodeToLogic.get(e.target_node_id);
+        return srcLogic === logicId || tgtLogic === logicId;
+      });
+      // #region agent log
+      _log("eventHasEdgeInLogic", { eventId, logicId, eventNodeCount: eventNodeIds.size, found }, "H1");
+      // #endregion
+      return found;
+    },
+    [graphEdges, graphNodes, nodeToLogic]
+  );
+
+  /** このイベントが含まれるロジック一覧（詳細・内包ブロック表示用。"" と _orphan_ 除く）。紐づけのみも含む。 */
+  const logicsForEvent = useMemo(() => {
+    if (!editEventId) return [];
+    const skip = new Set(["", "_orphan_"]);
+    const ids = new Set<string>();
+    mergedEventGroups.forEach((_, key) => {
+      const [eid, logicId] = key.split("::");
+      if (eid === editEventId && logicId != null && !skip.has(logicId)) ids.add(logicId);
+    });
+    emptyEventInstances.forEach((p) => {
+      if (p.eventId === editEventId && p.logicId != null && !skip.has(p.logicId)) ids.add(p.logicId);
+    });
+    eventLogicAssociations.forEach((p) => {
+      if (p.eventId === editEventId && p.logicId != null && !skip.has(p.logicId)) ids.add(p.logicId);
+    });
+    return Array.from(ids);
+  }, [editEventId, mergedEventGroups, emptyEventInstances, eventLogicAssociations]);
 
   const removeNodeFromEvent = useCallback(
     async (node: GraphNode) => {
@@ -1063,8 +1238,8 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
   );
 
   const addNodeToEvent = useCallback(
-    async (node: GraphNode) => {
-      if (!editEventId || editEventLogicId == null) return;
+    async (node: GraphNode, logicId: string) => {
+      if (!editEventId) return;
       try {
         const updated = { ...node, event_id: editEventId };
         const res = await fetch(`/api/graph/nodes/${node.node_id}`, {
@@ -1074,29 +1249,167 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
         });
         if (res.ok) {
           setEmptyEventInstances((prev) =>
-            prev.filter((p) => !(p.eventId === editEventId && p.logicId === editEventLogicId))
+            prev.filter((p) => {
+              if (p.eventId !== editEventId || p.logicId !== logicId) return true;
+              if (editInstanceId != null && editInstanceId !== "")
+                return p.instanceId !== editInstanceId;
+              return true;
+            })
           );
+          setRemovedEventIdsFromGraph((prev) => prev.filter((id) => id !== editEventId));
           await refreshGraph();
         }
       } catch (e) {
         alert(e instanceof Error ? e.message : "内包への追加に失敗しました");
       }
     },
-    [editEventId, editEventLogicId, refreshGraph]
+    [editEventId, editInstanceId, refreshGraph]
   );
 
+  /** ロジック紐づけのみ。グラフに新規イベント枠は作らない。 */
   const addEventToOtherLogic = useCallback(
     (logicId: string) => {
       if (!editEventId) return;
-      const key = `${editEventId}::${logicId}`;
-      if (mergedEventGroups.has(key)) return;
-      setEmptyEventInstances((prev) => {
+      setEventLogicAssociations((prev) => {
         if (prev.some((p) => p.eventId === editEventId && p.logicId === logicId)) return prev;
         return [...prev, { eventId: editEventId, logicId }];
       });
     },
-    [editEventId, mergedEventGroups]
+    [editEventId]
   );
+
+  /** 指定ロジックに空イベント枠（グラフ上のノード）を追加する。 */
+  const addEmptyInstanceForLogic = useCallback(
+    (logicId: string) => {
+      if (!editEventId) return;
+      const instanceId = `inst_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      setEmptyEventInstances((prev) => [...prev, { eventId: editEventId, logicId, instanceId }]);
+      setRemovedEventIdsFromGraph((prev) => prev.filter((id) => id !== editEventId));
+      setLayoutRevision((r) => r + 1);
+    },
+    [editEventId]
+  );
+
+  const removeEventGroupFromGraph = useCallback(async () => {
+    // #region agent log
+    _log("removeEventGroupFromGraph", { editEventId, called: true }, "H5");
+    // #endregion
+    if (!editEventId) return;
+
+    const hasEmptyForLogic = (eid: string, lid: string, instId?: string | null) =>
+      emptyEventInstances.some(
+        (p) =>
+          p.eventId === eid &&
+          p.logicId === lid &&
+          (instId == null || instId === "" || p.instanceId === instId)
+      );
+    const hasEmptyForEvent = (eid: string) =>
+      emptyEventInstances.some((p) => p.eventId === eid);
+
+    let hasAnythingToDelete: boolean;
+    if (editEventLogicId != null && editEventLogicId !== "") {
+      hasAnythingToDelete =
+        containedNodes.length > 0 || hasEmptyForLogic(editEventId, editEventLogicId, editInstanceId);
+    } else {
+      const nodesToRemove = graphNodes.filter((n) => n.event_id === editEventId);
+      hasAnythingToDelete = nodesToRemove.length > 0 || hasEmptyForEvent(editEventId);
+    }
+
+    if (!hasAnythingToDelete) {
+      setRemovedEventIdsFromGraph((prev) =>
+        prev.includes(editEventId) ? prev : [...prev, editEventId]
+      );
+      setLayoutRevision((r) => r + 1);
+      alert("グラフから削除しました。");
+      setEditEventId(null);
+      setEditEventLogicId(null);
+      setEditInstanceId(null);
+      setEventForm(null);
+      return;
+    }
+    // #region agent log
+    _log("removeEventGroupFromGraph", { editEventId, noConfirm: true, enteringTry: true }, "H5");
+    // #endregion
+
+    try {
+      const deleteNode = async (nodeId: string) => {
+        const res = await fetch(`/api/graph/nodes/${nodeId}`, { method: "DELETE" });
+        if (!res.ok) throw new Error(`ノード削除失敗: ${nodeId}`);
+      };
+      const deleteEdge = async (edgeId: string) => {
+        const res = await fetch(`/api/graph/edges/${edgeId}`, { method: "DELETE" });
+        if (!res.ok) throw new Error(`エッジ削除失敗: ${edgeId}`);
+      };
+
+      let wasLastRepresentation: boolean;
+      if (editEventLogicId != null && editEventLogicId !== "") {
+        if (containedNodes.length > 0) {
+          const edgeIds = new Set<string>();
+          for (const n of containedNodes) {
+            graphEdges.forEach((e) => {
+              if (e.source_node_id === n.node_id || e.target_node_id === n.node_id) edgeIds.add(e.edge_id);
+            });
+          }
+          for (const eid of edgeIds) await deleteEdge(eid);
+          for (const n of containedNodes) await deleteNode(n.node_id);
+        } else {
+          setEmptyEventInstances((prev) =>
+            prev.filter((p) => {
+              if (p.eventId !== editEventId || p.logicId !== editEventLogicId) return true;
+              if (editInstanceId != null && editInstanceId !== "") return p.instanceId !== editInstanceId;
+              return false;
+            })
+          );
+        }
+        const otherNodes = graphNodes.filter(
+          (n) => n.event_id === editEventId && nodeToLogic.get(n.node_id) !== editEventLogicId
+        );
+        const otherEmpties = emptyEventInstances.filter((p) => {
+          if (p.eventId !== editEventId) return false;
+          if (editInstanceId != null && editInstanceId !== "")
+            return !(p.logicId === editEventLogicId && p.instanceId === editInstanceId);
+          return true;
+        });
+        wasLastRepresentation = otherNodes.length === 0 && otherEmpties.length === 0;
+      } else {
+        const nodesToRemove = graphNodes.filter((n) => n.event_id === editEventId);
+        const edgeIds = new Set<string>();
+        for (const n of nodesToRemove) {
+          graphEdges.forEach((e) => {
+            if (e.source_node_id === n.node_id || e.target_node_id === n.node_id) edgeIds.add(e.edge_id);
+          });
+        }
+        for (const eid of edgeIds) await deleteEdge(eid);
+        for (const n of nodesToRemove) await deleteNode(n.node_id);
+        setEmptyEventInstances((prev) => prev.filter((p) => p.eventId !== editEventId));
+        wasLastRepresentation = true;
+      }
+      await refreshGraph();
+      setLayoutRevision((r) => r + 1);
+      if (wasLastRepresentation) {
+        setRemovedEventIdsFromGraph((prev) =>
+          prev.includes(editEventId) ? prev : [...prev, editEventId]
+        );
+      }
+      alert("削除しました。");
+      setEditEventId(null);
+      setEditEventLogicId(null);
+      setEditInstanceId(null);
+      setEventForm(null);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "削除に失敗しました");
+    }
+  }, [
+    editEventId,
+    editEventLogicId,
+    editInstanceId,
+    containedNodes,
+    graphNodes,
+    graphEdges,
+    emptyEventInstances,
+    nodeToLogic,
+    refreshGraph,
+  ]);
 
   const addNodeForExisting = useCallback(
     async (type: NodeType, referenceId: string) => {
@@ -1484,11 +1797,20 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
                           type="button"
                           className="btn-primary"
                           style={{ padding: "0.25rem 0.75rem", fontSize: "0.9rem" }}
-                          onClick={() => {
+                          onClick={async () => {
+                            await refreshEvents();
+                            const instanceId = `inst_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+                            setEmptyEventInstances((prev) => [
+                              ...prev,
+                              { eventId: ev.id, logicId: "_orphan_", instanceId },
+                            ]);
+                            setRemovedEventIdsFromGraph((prev) => prev.filter((id) => id !== ev.id));
                             setAddNodeModal({ open: false, type: null });
                             setConnectFromSource(null);
                             setEditEventId(ev.id);
-                            setEditEventLogicId(null);
+                            setEditEventLogicId("_orphan_");
+                            setEditInstanceId(instanceId);
+                            setLayoutRevision((r) => r + 1);
                           }}
                         >
                           選択
@@ -1524,10 +1846,18 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
                           });
                           await refreshEvents();
                           await refreshGraph();
+                          const instanceId = `inst_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+                          setEmptyEventInstances((prev) => [
+                            ...prev,
+                            { eventId: newId, logicId: "_orphan_", instanceId },
+                          ]);
+                          setRemovedEventIdsFromGraph((prev) => prev.filter((id) => id !== newId));
                           setAddNodeModal({ open: false, type: null });
                           setConnectFromSource(null);
                           setEditEventId(newId);
-                          setEditEventLogicId(null);
+                          setEditEventLogicId("_orphan_");
+                          setEditInstanceId(instanceId);
+                          setLayoutRevision((r) => r + 1);
                         } catch (e) {
                           console.error("Failed to create event:", e);
                           alert(e instanceof Error ? e.message : "イベントの作成に失敗しました");
@@ -1678,11 +2008,27 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
           nodes={nodes}
           edges={edges}
           onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
+          onEdgesChange={(changes) => {
+            for (const c of changes) {
+              const t = (c as { type?: string; id?: string }).type;
+              if (t === "select" || t === "remove")
+                _log("onEdgesChange", { type: t, id: (c as { id?: string }).id, selected: (c as { selected?: boolean }).selected }, "H4");
+            }
+            onEdgesChange(changes);
+          }}
           onConnect={onConnect}
           onConnectEnd={onConnectEnd}
+          onEdgesDelete={onEdgesDelete}
+          onEdgeClick={(_ev, edge) => _log("onEdgeClick", { edgeId: edge.id }, "H4")}
+          onEdgeContextMenu={(ev, edge) => {
+            ev.preventDefault();
+            setEdgeContextMenu({ x: ev.clientX, y: ev.clientY, edgeId: edge.id });
+          }}
           onNodeContextMenu={onNodeContextMenu}
           onNodeClick={onNodeClick}
+          deleteKeyCode={["Backspace", "Delete"]}
+          elementsSelectable={true}
+          elevateEdgesOnSelect={true}
           fitView
           nodeTypes={nodeTypes}
           nodeOrigin={[0, 0]}
@@ -1696,6 +2042,60 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
           <MiniMap />
         </ReactFlow>
       </div>
+
+      {/* エッジ右クリックメニュー */}
+      {edgeContextMenu && (
+        <>
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 9998 }}
+            onClick={() => setEdgeContextMenu(null)}
+            aria-hidden="true"
+          />
+          <div
+            style={{
+              position: "fixed",
+              left: edgeContextMenu.x,
+              top: edgeContextMenu.y,
+              zIndex: 9999,
+              background: "#1c2128",
+              border: "1px solid #30363d",
+              borderRadius: "8px",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+              padding: "4px 0",
+              minWidth: "140px",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              style={{
+                display: "block",
+                width: "100%",
+                textAlign: "left",
+                padding: "8px 12px",
+                border: "none",
+                borderRadius: 0,
+                background: "transparent",
+                color: "#e6edf3",
+                cursor: "pointer",
+              }}
+              onClick={async () => {
+                const id = edgeContextMenu.edgeId;
+                setEdgeContextMenu(null);
+                try {
+                  const res = await fetch(`/api/graph/edges/${id}`, { method: "DELETE" });
+                  if (!res.ok) throw new Error(`エッジ削除失敗: ${id}`);
+                  await refreshGraph();
+                } catch (err) {
+                  alert(err instanceof Error ? err.message : "エッジの削除に失敗しました");
+                }
+              }}
+            >
+              エッジを削除
+            </button>
+          </div>
+        </>
+      )}
 
       {/* ロジック詳細モーダル */}
       {logicDetailsModal.isOpen && logicDetailsData && (
@@ -1818,7 +2218,6 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
               onClose={() => setEditModalNode(null)}
               onSaved={refreshGraph}
               onDeletedFromGraph={refreshGraph}
-              onDeleted={refreshGraph}
               updateLogicDetail={updateLogicDetail}
               getLogicColor={(id, l) => getLogicColor(id, l)}
               getLogicName={(id, l) => getLogicName(id, l)}
@@ -1916,11 +2315,11 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
 
       {/* イベント編集モーダル（イベントノードクリック時） */}
       {editEventId && (
-        <div className="modal-overlay" onClick={() => { setEditEventId(null); setEditEventLogicId(null); setEventForm(null); }}>
+        <div className="modal-overlay" onClick={() => { setEditEventId(null); setEditEventLogicId(null); setEditInstanceId(null); setEventForm(null); }}>
           <div className="modal" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>イベント編集</h3>
-              <button type="button" className="modal-close" onClick={() => { setEditEventId(null); setEditEventLogicId(null); setEventForm(null); }}>
+              <button type="button" className="modal-close" onClick={() => { setEditEventId(null); setEditEventLogicId(null); setEditInstanceId(null); setEventForm(null); }}>
                 ×
               </button>
             </div>
@@ -2031,13 +2430,13 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
                 </div>
               </div>
               <div className="form-group">
-                <label>別ロジックにこのイベントを追加</label>
+                <label>ロジックを紐づけ</label>
                 <p style={{ fontSize: "0.85rem", color: "#8b949e", marginBottom: "0.5rem" }}>
-                  追加したロジックに空のイベント枠が表示され、そこで内包ノードを設定できます。
+                  紐づけたロジックに詳細を書けます。グラフに枠は増えません。枠を増やすには各ロジックブロックの「イベント枠を追加」を使います。
                 </p>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
                   {logics
-                    .filter((L) => !mergedEventGroups.has(`${editEventId}::${L.logic_id}`))
+                    .filter((L) => !logicsForEvent.includes(L.logic_id))
                     .map((L) => (
                       <button
                         key={L.logic_id}
@@ -2053,127 +2452,157 @@ const GraphTab: React.FC<GraphTabProps> = ({ logics, onLogicsChange }) => {
                         + {L.name || L.logic_id}
                       </button>
                     ))}
-                  {logics.filter((L) => !mergedEventGroups.has(`${editEventId}::${L.logic_id}`)).length === 0 && (
-                    <span style={{ fontSize: "0.9rem", color: "#8b949e" }}>すべてのロジックに追加済みです</span>
+                  {logics.filter((L) => !logicsForEvent.includes(L.logic_id)).length === 0 && (
+                    <span style={{ fontSize: "0.9rem", color: "#8b949e" }}>全ロジックに紐づけ済み</span>
                   )}
                 </div>
               </div>
-              {editEventLogicId != null && editEventLogicId !== "" && (
-                <div className="form-group">
-                  <label>ロジックごとの詳細・内包事象</label>
-                  <div
-                    style={{
-                      marginBottom: "1rem",
-                      padding: "1rem",
-                      border: "1px solid #30363d",
-                      borderRadius: 8,
-                      background: "#0d1117",
-                    }}
-                  >
-                    <span
-                      style={{
-                        display: "inline-block",
-                        padding: "0.2rem 0.5rem",
-                        borderRadius: 6,
-                        background: getLogicColor(editEventLogicId, logics),
-                        color: "#fff",
-                        fontSize: "0.85rem",
-                        marginBottom: "0.5rem",
-                      }}
-                    >
-                      {getLogicName(editEventLogicId, logics)}
-                    </span>
-                    <div style={{ marginTop: "0.5rem" }}>
-                      <label style={{ fontSize: "0.85rem", color: "#8b949e", display: "block", marginBottom: "0.25rem" }}>
-                        詳細
-                      </label>
-                      <textarea
-                        className="form-control"
-                        placeholder="このロジックでの説明を入力..."
-                        value={eventForm.logic_details[editEventLogicId] ?? ""}
-                        onChange={(e) =>
-                          setEventForm((f) =>
-                            !f ? null : {
-                              ...f,
-                              logic_details: { ...f.logic_details, [editEventLogicId]: e.target.value },
-                            }
-                          )
-                        }
-                        rows={2}
-                        style={{ marginTop: "0.25rem" }}
-                      />
-                    </div>
-                    <div style={{ marginTop: "0.75rem" }}>
-                      <label style={{ fontSize: "0.85rem", color: "#8b949e", display: "block", marginBottom: "0.35rem" }}>
-                        内包事象（このロジック内のノード）
-                      </label>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.75rem" }}>
-                    {containedNodes.map((n) => (
-                      <span
-                        key={n.node_id}
+              <div className="form-group">
+                <label>ロジックごとの詳細・内包事象</label>
+                {logicsForEvent.length === 0 ? (
+                  <p style={{ fontSize: "0.9rem", color: "#8b949e" }}>
+                    「ロジックを紐づけ」でロジックを追加すると、ここに詳細・内包事象を設定できます。
+                  </p>
+                ) : (
+                  logicsForEvent.map((logicId) => {
+                    const contained = containedByLogic.get(logicId) ?? [];
+                    const addable = addableToEventByLogic.get(logicId) ?? [];
+                    const hasGroup = editEventId ? hasGroupForLogic(editEventId, logicId) : false;
+                    const hasEdge = editEventId ? eventHasEdgeInLogic(editEventId, logicId) : false;
+                    const showAddFrame = !hasGroup && !hasEdge;
+                    // #region agent log
+                    _log("logicBlock", { editEventId, logicId, hasGroup, hasEdge, showAddFrame }, "H2");
+                    // #endregion
+                    return (
+                      <div
+                        key={logicId}
                         style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: "0.35rem",
-                          padding: "0.25rem 0.5rem",
-                          background: "#21262d",
-                          borderRadius: 6,
-                          fontSize: "0.9rem",
+                          marginBottom: "1rem",
+                          padding: "1rem",
                           border: "1px solid #30363d",
+                          borderRadius: 8,
+                          background: "#0d1117",
                         }}
                       >
-                        {getNodeLabel(n)}
-                        <button
-                          type="button"
-                          className="modal-close"
-                          style={{ padding: "0.1rem", fontSize: "1rem", lineHeight: 1 }}
-                          onClick={() => removeNodeFromEvent(n)}
-                          title="内包から削除"
+                        <span
+                          style={{
+                            display: "inline-block",
+                            padding: "0.2rem 0.5rem",
+                            borderRadius: 6,
+                            background: getLogicColor(logicId, logics),
+                            color: "#fff",
+                            fontSize: "0.85rem",
+                            marginBottom: "0.5rem",
+                          }}
                         >
-                          ×
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                  {addableToEventNodes.length > 0 && (
-                    <div>
-                      <label style={{ fontSize: "0.85rem", color: "#8b949e", display: "block", marginBottom: "0.35rem" }}>
-                        内包に追加
-                      </label>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-                        {addableToEventNodes.map((n) => (
-                          <button
-                            key={n.node_id}
-                            type="button"
-                            className="btn-secondary"
-                            style={{ padding: "0.25rem 0.5rem", fontSize: "0.9rem" }}
-                            onClick={() => addNodeToEvent(n)}
-                          >
-                            + {getNodeLabel(n)}
-                          </button>
-                        ))}
+                          {getLogicName(logicId, logics)}
+                        </span>
+                        <div style={{ marginTop: "0.5rem" }}>
+                          <label style={{ fontSize: "0.85rem", color: "#8b949e", display: "block", marginBottom: "0.25rem" }}>
+                            詳細
+                          </label>
+                          <textarea
+                            className="form-control"
+                            placeholder="このロジックでの説明を入力..."
+                            value={eventForm.logic_details[logicId] ?? ""}
+                            onChange={(e) =>
+                              setEventForm((f) =>
+                                !f ? null : {
+                                  ...f,
+                                  logic_details: { ...f.logic_details, [logicId]: e.target.value },
+                                }
+                              )
+                            }
+                            rows={2}
+                            style={{ marginTop: "0.25rem" }}
+                          />
+                        </div>
+                        {showAddFrame ? (
+                          <div style={{ marginTop: "0.75rem" }}>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              style={{ fontSize: "0.9rem" }}
+                              onClick={() => addEmptyInstanceForLogic(logicId)}
+                            >
+                              イベント枠を追加（グラフに表示）
+                            </button>
+                          </div>
+                        ) : (
+                        <div style={{ marginTop: "0.75rem" }}>
+                          <label style={{ fontSize: "0.85rem", color: "#8b949e", display: "block", marginBottom: "0.35rem" }}>
+                            内包事象（このロジック内のノード）
+                          </label>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.75rem" }}>
+                            {contained.map((n) => (
+                              <span
+                                key={n.node_id}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "0.35rem",
+                                  padding: "0.25rem 0.5rem",
+                                  background: "#21262d",
+                                  borderRadius: 6,
+                                  fontSize: "0.9rem",
+                                  border: "1px solid #30363d",
+                                }}
+                              >
+                                {getNodeLabel(n)}
+                                <button
+                                  type="button"
+                                  className="modal-close"
+                                  style={{ padding: "0.1rem", fontSize: "1rem", lineHeight: 1 }}
+                                  onClick={() => removeNodeFromEvent(n)}
+                                  title="内包から削除"
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                          {addable.length > 0 && (
+                            <div>
+                              <label style={{ fontSize: "0.85rem", color: "#8b949e", display: "block", marginBottom: "0.35rem" }}>
+                                内包に追加
+                              </label>
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                                {addable.map((n) => (
+                                  <button
+                                    key={n.node_id}
+                                    type="button"
+                                    className="btn-secondary"
+                                    style={{ padding: "0.25rem 0.5rem", fontSize: "0.9rem" }}
+                                    onClick={() => addNodeToEvent(n, logicId)}
+                                  >
+                                    + {getNodeLabel(n)}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        )}
                       </div>
-                    </div>
-                  )}
-                    </div>
-                  </div>
-                </div>
-              )}
+                    );
+                  })
+                )}
+              </div>
                 </>
               )}
             </div>
             <div className="modal-footer">
               {eventForm && (
                 <>
-                  <button type="button" className="btn-danger" onClick={removeEvent}>
-                    削除
+                  <button type="button" className="btn-danger" onClick={removeEventGroupFromGraph}>
+                    ノードを削除
                   </button>
                   <button type="button" className="btn-primary" onClick={saveEvent}>
                     保存
                   </button>
                 </>
               )}
-              <button type="button" className="btn-secondary" onClick={() => { setEditEventId(null); setEditEventLogicId(null); setEventForm(null); }}>
+              <button type="button" className="btn-secondary" onClick={() => { setEditEventId(null); setEditEventLogicId(null); setEditInstanceId(null); setEventForm(null); }}>
                 閉じる
               </button>
             </div>
